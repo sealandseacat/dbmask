@@ -34,4 +34,4 @@ jobs:
         # Pinned to a commit SHA, not a moving tag: this job holds
         # id-token: write, so a hijacked tag could publish to PyPI as us.
         # Dependabot (github-actions ecosystem) keeps the pin current.
-        uses: pypa/gh-action-pypi-publish@a892a5a61159132606e93a2fa6f4358831b04d26  # v1.14.2
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

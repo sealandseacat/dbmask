@@ -68,7 +68,7 @@ dev = [
     "pytest-cov>=4.1",
     "ruff>=0.8",
     # mypy 2.x dropped --python-version 3.9; stay on 1.x until our floor moves.
-    "mypy>=1.14,<2",
+    "mypy>=1.14,<3",
     "types-PyYAML",
     "types-requests",
     # so the LocalProvider tests run instead of being importorskip'd away

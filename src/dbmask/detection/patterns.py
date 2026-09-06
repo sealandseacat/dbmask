@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable, Optional
 
 
@@ -56,9 +57,72 @@ _UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 _DATE = r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}([ T]\d{1,2}:\d{2}(:\d{2})?)?$"
 
 
-def _looks_like_full_name(value: str) -> bool:
-    """Two-to-three capitalized words, letters/hyphens/apostrophes only."""
+_DATE_RE = re.compile(_DATE)
+_PHONE_RE = re.compile(_PHONE)
+_STREET = (
+    r"^\d+[a-z]?\s+[\w'.\- ]+?\s+"
+    r"(st|street|ave|avenue|rd|road|blvd|boulevard|ln|lane|dr|drive|ct|court|"
+    r"way|pl|place|ter|terrace|cir|circle|pkwy|parkway|hwy|highway)\.?"
+    r"(\s+(apt|ste|suite|unit|#)\s*[\w-]+)?$"
+)
+
+
+@lru_cache(maxsize=1)
+def _known_cities() -> frozenset:
+    """Lower-cased city names from the bundled ``us_cities`` dictionary.
+
+    Imported lazily so this module does not depend on the masking package at
+    import time. Extend the pool with
+    ``dbmask.masking.dictionaries.register_dictionary("us_cities", [...])``
+    and both detection and masking learn the new locales together.
+    """
+    from dbmask.masking.dictionaries import get_dictionary
+
+    return frozenset(c.strip().lower() for c in get_dictionary("us_cities") if c.strip())
+
+
+def _looks_like_city(value: str) -> bool:
+    return (value or "").strip().lower() in _known_cities()
+
+
+def _looks_like_phone(value: str) -> bool:
+    """Phone-shaped, and specifically *not* a date.
+
+    ``^\\+?[\\d\\s().-]{7,}$`` on its own also matches ``1994-03-15`` — a date
+    is digits plus hyphens and longer than seven characters — so date columns
+    were classified as phone numbers and masked with ``format_random``, which
+    does not preserve a valid calendar date. Dates are excluded here, and the
+    digit count is bounded to the E.164 range so long integers (amounts, row
+    counters) stop matching too.
+    """
     value = (value or "").strip()
+    if not value or _DATE_RE.match(value):
+        return False
+    if "," in value or re.fullmatch(r"\d+\.\d+", value):
+        return False  # 1,234,567.89 and 4500.00 are amounts, not phone numbers
+    if not _PHONE_RE.match(value):
+        return False
+    digits = re.sub(r"\D", "", value)
+    if not 7 <= len(digits) <= 15:
+        return False
+    # A bare run of digits with no separator, plus sign or parentheses is far
+    # more often an amount or a counter than a phone number. Accept it only at
+    # the lengths real phone numbers actually take.
+    if not re.search(r"[\s().+-]", value):
+        return len(digits) in (10, 11)
+    return True
+
+
+def _looks_like_full_name(value: str) -> bool:
+    """Two-to-three capitalized words, letters/hyphens/apostrophes only.
+
+    Known city names are excluded: ``New York`` and ``Salt Lake City`` are
+    capitalized multi-word strings too, and city columns were being masked with
+    person names.
+    """
+    value = (value or "").strip()
+    if _looks_like_city(value):
+        return False
     parts = value.split()
     if not (2 <= len(parts) <= 3):
         return False
@@ -89,9 +153,13 @@ DEFAULT_PATTERNS: list[Pattern] = [
     Pattern("ssn", _regex_test(_SSN_US), min_ratio=0.6),
     Pattern("credit_card", _luhn_valid, min_ratio=0.6, weight=1.2),
     Pattern("zip_code", _regex_test(_ZIP_US), min_ratio=0.7),
-    Pattern("phone", _regex_test(_PHONE), min_ratio=0.7, weight=0.8),
+    Pattern("phone", _looks_like_phone, min_ratio=0.7, weight=0.8),
+    Pattern("address", _regex_test(_STREET), min_ratio=0.6, weight=0.95),
+    # Dictionary-backed, so it outranks the shape-only full_name heuristic on
+    # a genuine city column while never firing on a person-name column.
+    Pattern("city", _looks_like_city, min_ratio=0.6, weight=1.0),
     Pattern("full_name", _looks_like_full_name, min_ratio=0.5, weight=0.9),
-    Pattern("date", _regex_test(_DATE), min_ratio=0.8, weight=0.5),
+    Pattern("date", _regex_test(_DATE), min_ratio=0.8, weight=0.9),
 ]
 
 

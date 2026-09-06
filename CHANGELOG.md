@@ -7,7 +7,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Date, city and street columns are no longer misclassified.** The `phone`
+  pattern matched date-shaped values (`1994-03-15` is digits and hyphens,
+  longer than seven characters) and outweighed `date`, so date columns were
+  masked with `format_random` and stopped being valid calendar dates. The
+  `full_name` pattern matched two-word city names, so city columns were
+  replaced with person names. Street addresses matched nothing and were left
+  unmasked as `UNKNOWN`. `phone` now rejects dates and bounds its digit count,
+  and new dictionary-backed `city` and `address` patterns take those columns.
+  [#24]
 
 ## [0.1.1] - 2026-08-24
 
@@ -159,3 +169,4 @@ First public release.
 [#11]: https://github.com/sealandseacat/dbmask/issues/11
 [#12]: https://github.com/sealandseacat/dbmask/issues/12
 [GHSA-2jwm-hcfc-72xm]: https://github.com/sealandseacat/dbmask/security/advisories/GHSA-2jwm-hcfc-72xm
+[#24]: https://github.com/sealandseacat/dbmask/issues/24

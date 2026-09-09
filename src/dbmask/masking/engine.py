@@ -52,8 +52,14 @@ class TableMaskResult:
 
 
 class MaskingEngine:
-    def __init__(self, config: MaskingConfig, seed_store: Optional[SeedStore] = None):
+    def __init__(
+        self, config: MaskingConfig, seed_store: Optional[SeedStore] = None, *,
+        date_order: str = "MDY",
+    ):
         self.config = config
+        if date_order not in {"MDY", "DMY"}:
+            raise ValueError("date_order must be MDY or DMY")
+        self.date_order = date_order
         # Normalize per-column overrides to lowercase keys for matching.
         self._column_strategies = {
             k.lower(): v for k, v in (config.column_strategies or {}).items()
@@ -165,7 +171,9 @@ class MaskingEngine:
              new pair, which assigns it a seed token for future tracking.
         """
         strategy = get_strategy(plan.strategy_name)
-        ctx = MaskContext(column=plan.column, rule=plan.rule, seed=self.config.seed)
+        ctx = MaskContext(
+            column=plan.column, rule=plan.rule, seed=self.config.seed, date_order=self.date_order,
+        )
 
         store = self.seed_store()
         if (
@@ -178,6 +186,10 @@ class MaskingEngine:
         # Pairs are scoped per strategy, so the same value masks identically in
         # every column that uses that strategy (preserving joins across tables).
         scope = plan.strategy_name
+        if scope == "fake_date":
+            # Parser semantics changed; old format-random fallbacks must not be
+            # reused, nor may an MDY interpretation leak into a DMY deployment.
+            scope += ":calendar-v2:" + self.date_order
         original = str(value)
 
         recorded = store.lookup(scope, original)

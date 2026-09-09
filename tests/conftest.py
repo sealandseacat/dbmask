@@ -60,7 +60,8 @@ def cli_env(tmp_path: Path) -> SimpleNamespace:
 
     base_config = {
         "database": {"url": f"sqlite:///{db_path}", "name": "sample"},
-        "detection": {"sample_size": 10, "use_patterns": True, "use_history": True},
+        # These integration fixtures deliberately contain only three distinct values.
+        "detection": {"sample_size": 10, "pattern_min_samples": 1, "use_patterns": True, "use_history": True},
         "history": {"enabled": True, "url": f"sqlite:///{tmp_path / 'history.db'}"},
         "llm": {"enabled": False},
         "masking": {

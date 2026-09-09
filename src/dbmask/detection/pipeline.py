@@ -19,7 +19,7 @@ from typing import Optional
 from dbmask.config import Config
 from dbmask.connectors.base import Connector
 from dbmask.detection.overrides import FieldOverrides
-from dbmask.detection.patterns import PatternMatcher
+from dbmask.detection.patterns import PatternAnalysis, PatternMatcher
 from dbmask.detection.result import Decision, Sensitivity
 from dbmask.history.store import HistoryStore
 from dbmask.llm.base import LLMProvider
@@ -63,7 +63,11 @@ class DetectionPipeline:
         self.config = config
         self.history = history
         self.overrides = overrides or FieldOverrides()
-        self.patterns = patterns or PatternMatcher()
+        self.patterns = patterns or PatternMatcher(
+            min_ratio=config.detection.pattern_min_ratio,
+            min_samples=config.detection.pattern_min_samples,
+            date_order=config.detection.date_order,
+        )
         self.llm = llm
         self.stats = PipelineStats()
         self._skip_cols = [re.compile(p, re.IGNORECASE) for p in config.detection.skip_column_patterns]
@@ -83,10 +87,18 @@ class DetectionPipeline:
         db = connector.name
         type_reader = getattr(connector, "column_type", None)
         data_type = (type_reader(schema, table, column) if type_reader else None) or ""
+        analysis: Optional[PatternAnalysis] = None
 
         def finish(decision: Decision) -> Decision:
             decision.data_type = data_type
             decision.user_id = self.config.detection.user_id
+            if analysis is not None:
+                decision.pattern_candidates = analysis.candidates
+                decision.pattern_sample_count = analysis.total
+                decision.pattern_sample_basis = "distinct_values"
+                decision.detail = (
+                    decision.detail + "; Distinct nonblank sample evidence: " + analysis.summary()
+                )
             return self._finalize(decision)
 
         # 1) Manual override wins outright.
@@ -111,13 +123,26 @@ class DetectionPipeline:
 
         # 3) Pattern matching.
         if self.config.detection.use_patterns and sample:
-            match = self.patterns.match(sample)
+            analysis = self.patterns.analyze(sample, column=column, data_type=data_type)
+            match = analysis.match
             if match is not None:
                 return finish(
                     Decision(db, schema, table, column, Sensitivity.SENSITIVE,
                              rule=match.name, source="pattern", confidence=match.confidence,
-                             detail=f"{match.ratio:.0%} of samples matched '{match.name}'")
+                             detail=f"Pattern suggestion '{match.name}'; requires review")
                 )
+
+            # Do not let an LLM silently settle a strong metadata/value conflict
+            # or a collision between eligible patterns. Preserve it for a person.
+            conflict = any(
+                c.ratio >= c.threshold and any("conflicts" in r for r in c.reasons)
+                for c in analysis.candidates
+            ) or any(r.startswith(("Conflicting", "Multiple eligible")) for r in analysis.reasons)
+            if conflict:
+                return finish(Decision(
+                    db, schema, table, column, Sensitivity.UNKNOWN,
+                    source="pattern_conflict", detail="Conflicting evidence; human review required",
+                ))
 
         # 4) LLM fallback.
         if self.llm is not None and sample:
@@ -129,7 +154,7 @@ class DetectionPipeline:
         # never persisted to history — every run re-evaluates it, so a column
         # that was empty yesterday is not permanently stamped as safe.
         if sample:
-            detail = ("No pattern matched and the LLM fallback is disabled — "
+            detail = ("Pattern evidence is inconclusive and the LLM fallback is disabled — "
                       "review manually (overrides file) or enable llm.enabled")
             source = "inconclusive"
         else:

@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
+from dbmask.detection.patterns import PatternEvidence
+
 
 class Sensitivity(str, Enum):
     """Whether a column is considered sensitive."""
@@ -32,8 +34,9 @@ class Decision:
         Which layer made the decision: ``history``, ``override``, ``pattern``
         or ``llm``. Useful for auditing and debugging.
     confidence:
-        0.0 - 1.0 score. Pattern/override layers tend to be high confidence;
-        LLM confidence is reported when available.
+        Compatibility score in [0, 1]. For pattern results this is the raw
+        sample match ratio, NOT a probability of correct classification.
+        LLM confidence is reported separately when that layer decides.
     detail:
         Free-form human-readable explanation.
     token_usage:
@@ -61,6 +64,10 @@ class Decision:
     masking_strategy: Optional[str] = None
     data_type: str = ""
     expires_at: str = ""
+    # Pattern ratios are observed sample proportions, not probabilities.
+    pattern_candidates: list[PatternEvidence] = field(default_factory=list)
+    pattern_sample_count: int = 0
+    pattern_sample_basis: str = ""
 
     @property
     def is_sensitive(self) -> bool:

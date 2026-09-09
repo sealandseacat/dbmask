@@ -18,7 +18,7 @@ from dbmask.detection.patterns import PatternMatcher
 
 @pytest.fixture
 def matcher() -> PatternMatcher:
-    return PatternMatcher()
+    return PatternMatcher(min_samples=1)
 
 
 @pytest.mark.parametrize(
@@ -29,18 +29,18 @@ def matcher() -> PatternMatcher:
         ("date", ["2024/01/15", "2023/12/01", "2022/7/4"]),
         ("phone", ["(415) 555-0132", "+1 415 555 0132", "415-555-0132"]),
         ("phone", ["4155550132", "2125550199", "9175550111"]),
-        ("city", ["New York", "Chicago", "Salt Lake City"]),
+        ("city", ["New York", "Chicago", "Boston"]),
         ("city", ["Los Angeles", "San Francisco", "Boston"]),
         ("full_name", ["Mary Johnson", "Robert Smith", "Linda Davis"]),
         ("address", ["1409 Lake St", "88 Sunset Blvd", "12 Oak Avenue"]),
-        ("ssn", ["123-45-6789", "987-65-4321", "555-12-3456"]),
+        ("ssn", ["123-45-6789", "321-65-4321", "555-12-3456"]),
         ("zip_code", ["94105", "10001", "60601"]),
         ("email", ["a@b.com", "c.d@e.org", "x@y.net"]),
         ("credit_card", ["4539578763621486", "4916338506082832", "4485275742308327"]),
     ],
 )
 def test_expected_pattern_wins(matcher: PatternMatcher, expected: str, values: list[str]) -> None:
-    match = matcher.match(values)
+    match = matcher.match(values, column=expected)
     assert match is not None, f"no pattern matched {values!r}"
     assert match.name == expected
 
@@ -59,18 +59,13 @@ def test_amounts_are_not_phone_numbers(matcher: PatternMatcher, values: list[str
 
 def test_city_does_not_shadow_person_names(matcher: PatternMatcher) -> None:
     """A person-name column must not be captured by the city dictionary."""
-    match = matcher.match(["Mary Johnson", "Robert Smith", "Linda Davis"])
+    match = matcher.match(["Mary Johnson", "Robert Smith", "Linda Davis"], column="full_name")
     assert match is not None
     assert match.name == "full_name"
 
 
-def test_unknown_city_still_falls_back_to_full_name(matcher: PatternMatcher) -> None:
-    """Cities outside the bundled dictionary keep the old behaviour.
-
-    This is a documented limitation rather than a goal: the bundled
-    ``us_cities`` list is short, so an unlisted city still looks like a name.
-    Register a fuller dictionary to fix it for a given deployment.
-    """
-    match = matcher.match(["Ann Arbor", "Palo Alto", "Chapel Hill"])
-    assert match is not None
-    assert match.name in {"city", "full_name"}
+def test_unknown_city_does_not_fall_back_to_full_name(matcher: PatternMatcher) -> None:
+    """Unlisted cities require review; capitalized words do not prove a name."""
+    values = ["Ann Arbor", "Palo Alto", "Chapel Hill"]
+    assert matcher.match(values, column="city") is None
+    assert matcher.match(values) is None

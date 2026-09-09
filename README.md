@@ -125,8 +125,12 @@ flowchart TD
   reviewer IDs, explicit masking strategies, expiry/type checks and revisions.
   Import/export CSV, XLSX (`pip install "dbmask[excel]"`), or a strict Markdown
   table. See [the history workflow](docs/history.md) for templates and migration.
-- **Patterns**: value-based heuristics (email, phone, SSN, credit card w/
-  Luhn, UUID, IP, dates, names…) — free and deterministic.
+- **Patterns**: explicit format checks plus column-name and database-type
+  context, with no weighted winner selection. Defaults: at least 20 nonblank
+  samples and a match ratio of at least 90%. Reports show counts and ratios
+  for the SQL connector's **distinct-value samples**, not whole-column row
+  percentages. Conflicts and ambiguous identifiers need review. See
+  [pattern detection](docs/detection.md) for supported formats and migration.
 - **LLM (optional, off by default)**: for the long tail. Works with OpenAI or
   an OpenAI-compatible endpoint — or a **fully local** model (Ollama, LM
   Studio, vLLM), so nothing leaves your network. `llm.send_values: false`

@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
 
+from dbmask.dates import parse_date
 from dbmask.masking import dictionaries as dicts
 from dbmask.masking.format import (
     digits_only_random,
@@ -37,6 +38,7 @@ class MaskContext:
     column: str
     rule: Optional[str]
     seed: Optional[str]
+    date_order: str = "MDY"
 
 
 Strategy = Callable[[str, MaskContext], object]
@@ -290,22 +292,6 @@ def strat_fake_credit_card(value, ctx: MaskContext):
     return "".join(out)
 
 
-# Recognized textual date(-time) layouts, tried in order.
-_DATE_FORMATS = (
-    "%Y-%m-%d %H:%M:%S.%f",
-    "%Y-%m-%d %H:%M:%S",
-    "%Y-%m-%d %H:%M",
-    "%Y-%m-%dT%H:%M:%S.%f",
-    "%Y-%m-%dT%H:%M:%S",
-    "%Y-%m-%dT%H:%M",
-    "%Y-%m-%d",
-    "%Y/%m/%d %H:%M:%S",
-    "%Y/%m/%d",
-    "%m/%d/%Y",
-    "%d.%m.%Y",
-)
-
-
 def _date_shift(anchor: str, ctx: MaskContext) -> timedelta:
     rng = seeded_rng(anchor, ctx.seed)
     return timedelta(days=rng.randint(30, 730) * rng.choice((-1, 1)))
@@ -327,12 +313,14 @@ def strat_fake_date(value, ctx: MaskContext):
     if isinstance(value, date):
         return value + _date_shift(value.isoformat(), ctx)
     s = str(value)
-    for fmt in _DATE_FORMATS:
+    parsed = parse_date(s, ctx.date_order)
+    if parsed is not None:
+        delta = _date_shift(s, ctx)
         try:
-            parsed = datetime.strptime(s, fmt)
-        except ValueError:
-            continue
-        return (parsed + _date_shift(s, ctx)).strftime(fmt)
+            shifted = parsed.value + delta
+        except OverflowError:
+            shifted = parsed.value - delta
+        return parsed.render(shifted)
     rng = seeded_rng(s, ctx.seed)
     return format_preserving_random(s, rng)
 

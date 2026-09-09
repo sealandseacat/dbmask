@@ -84,9 +84,13 @@ class LLMConfig:
 class DetectionConfig:
     """Tuning knobs for the detection pipeline."""
 
-    sample_size: int = 100            # rows sampled per column for pattern matching
+    sample_size: int = 100            # distinct values sampled per column
     use_patterns: bool = True
     use_history: bool = True
+    pattern_min_ratio: float = 0.9
+    pattern_min_samples: int = 20
+    # Explicit order for slash/hyphen dates with the year last.
+    date_order: str = "MDY"
     # Analyst who ran this analysis; separate from the eventual reviewer.
     user_id: str = ""
     # Path to the field override file (sensitive/not-sensitive toggles).
@@ -94,6 +98,18 @@ class DetectionConfig:
     # Skip columns/tables by name regex (fully optional).
     skip_column_patterns: list[str] = field(default_factory=list)
     skip_table_patterns: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not 0 < self.pattern_min_ratio <= 1:
+            raise ValueError("pattern_min_ratio must be in (0, 1]")
+        if (
+            isinstance(self.pattern_min_samples, bool)
+            or not isinstance(self.pattern_min_samples, int)
+            or self.pattern_min_samples < 1
+        ):
+            raise ValueError("pattern_min_samples must be a positive integer")
+        if self.date_order not in {"MDY", "DMY"}:
+            raise ValueError("date_order must be MDY or DMY")
 
 
 @dataclass

@@ -107,9 +107,12 @@ def scan(config_path: str, as_json: bool, output: str) -> None:
             else:
                 flag = "ok"
             rule = f" -> {d.rule}" if d.rule else ""
+            score = f"match={d.confidence:.2%}" if d.source == "pattern" else f"conf={d.confidence:.2f}"
             click.echo(f"[{flag:9}] {d.schema}.{d.table}.{d.column}{rule} "
-                       f"({d.source}, conf={d.confidence:.2f})")
-            if d.source == "history_pending":
+                       f"({d.source}, {score})")
+            if d.pattern_sample_basis:
+                click.echo(f"  {d.detail}")
+            elif d.source == "history_pending":
                 click.echo(f"  Review required: {d.detail}")
         s = runner.pipeline.stats
         click.echo("\n--- Summary ---")

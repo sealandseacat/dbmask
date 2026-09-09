@@ -51,7 +51,10 @@ masked database against this untouched original.
 
 ```yaml
 detection:
-  sample_size: 100              # values sampled per column for patterns
+  sample_size: 100              # distinct values sampled per column for patterns
+  pattern_min_ratio: 0.9        # inclusive; raw match ratio, no weights
+  pattern_min_samples: 20       # nonblank sampled values needed for a suggestion
+  date_order: MDY               # MDY (US default) or explicitly DMY
   use_patterns: true
   use_history: true
   user_id: analyst-001          # analysis author, separate from reviewer
@@ -59,6 +62,11 @@ detection:
   skip_column_patterns: []      # regex, case-insensitive: [".*_id$"]
   skip_table_patterns: []       # ["^tmp_", "_bkp$"]
 ```
+
+Ratios and supported formats are described in [Pattern detection](detection.md).
+Small synthetic demos may explicitly lower `pattern_min_samples`; the production
+default is 20. A strong context conflict is held for a person even when the LLM
+is enabled. Other inconclusive evidence may use the optional LLM fallback.
 
 ### Field overrides
 

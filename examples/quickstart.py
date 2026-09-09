@@ -66,6 +66,7 @@ def main() -> None:
         database=DatabaseConfig(url=f"sqlite:///{db_path}", name="demo"),
         detection=DetectionConfig(
             sample_size=10,
+            pattern_min_samples=1,  # Tiny synthetic demo; production default is 20.
             overrides_file=str(overrides),
             skip_column_patterns=["^id$"],  # surrogate keys aren't sensitive
         ),

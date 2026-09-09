@@ -9,6 +9,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Contextual pattern evidence in CLI/JSON and review-export reasons: hit counts,
+  nonblank distinct-sample counts, unweighted ratios and rejection reasons.
+- Adapted date regression tests from PR #25 by **1cbyc** and **insisong**,
+  including calendar-preserving scan-and-mask coverage.
+
 - Import/export historical decisions using CSV, XLSX (optional `excel` extra),
   or a strict Markdown table. Records preserve analyst `user_id`, reviewer,
   review dates, masking strategy, type baseline and expiry. Atomic imports
@@ -16,6 +21,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   preserve prior decisions for audit. `scan --output` creates a review file.
 
 ### Changed
+
+- Pattern selection no longer uses `ratio * weight`; `Pattern.weight` is a
+  deprecated, ignored compatibility field. Default thresholds are 90% and 20
+  nonblank sampled values. Name/type conflicts and ambiguous candidates are
+  held for review. Bare numeric identifiers, names, cities, ZIPs and cards
+  require appropriate context. See `docs/detection.md` for migration details.
+- Date detection and `fake_date` share explicit calendar parsing with MDY/DMY
+  configuration. `fake_date` seed-map entries use a new, date-order-specific
+  scope to avoid reusing invalid outputs from the old parser.
 
 - Only approved, applicable imported history is reused. Automatic results and
   legacy rows are pending suggestions, not approvals. Imported pending,
@@ -25,7 +39,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- **Date, city and street columns are no longer misclassified.** The `phone`
+- Reject impossible calendar dates, invalid IPv4 octets and excluded US SSN
+  number groups; restrict phone detection to supported NANP formats. Unknown
+  cities no longer fall back to names. City reference updates invalidate the
+  cached lookup through its content key.
+
+- **Earlier date/city/address fix (#26), now refined above.** The `phone`
   pattern matched date-shaped values (`1994-03-15` is digits and hyphens,
   longer than seven characters) and outweighed `date`, so date columns were
   masked with `format_random` and stopped being valid calendar dates. The

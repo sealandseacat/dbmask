@@ -7,7 +7,6 @@ from typing import Optional
 from dbmask.config import Config
 from dbmask.connectors.sql import SQLConnector
 from dbmask.detection.overrides import FieldOverrides
-from dbmask.detection.patterns import PatternMatcher
 from dbmask.detection.pipeline import DetectionPipeline, TokenBudgetExceeded
 from dbmask.detection.result import Decision
 from dbmask.history.store import HistoryStore
@@ -54,16 +53,14 @@ class Runner:
             HistoryStore(config.history.url) if config.history.enabled else None
         )
         overrides = FieldOverrides.load(config.detection.overrides_file)
-        patterns = PatternMatcher()
         llm = create_provider(config.llm)
         self.pipeline = DetectionPipeline(
             config=config,
             history=self.history,
             overrides=overrides,
-            patterns=patterns,
             llm=llm,
         )
-        self.masker = MaskingEngine(config.masking)
+        self.masker = MaskingEngine(config.masking, date_order=config.detection.date_order)
 
     # -- lifecycle ------------------------------------------------------------
     def open(self) -> None:
@@ -197,4 +194,3 @@ class Runner:
                 schemas=schemas,
                 sensitive_columns=sensitive,
             )
-

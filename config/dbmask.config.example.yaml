@@ -25,7 +25,10 @@ database:
 
 # --- 2. Detection tuning ----------------------------------------------------
 detection:
-  sample_size: 100           # rows sampled per column for pattern matching
+  sample_size: 100           # distinct values sampled per column
+  pattern_min_ratio: 0.9     # inclusive, unweighted sample match ratio
+  pattern_min_samples: 20    # minimum nonblank sampled values
+  date_order: MDY            # MDY (US default) or explicitly DMY
   use_patterns: true
   use_history: true
   user_id: analyst-001       # analyst ID; reviewed_by is stored separately

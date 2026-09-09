@@ -50,7 +50,7 @@ def sqlite_db(tmp_path: Path) -> str:
 def _config(db_path: str, tmp_path: Path, dry_run: bool = True) -> Config:
     return Config(
         database=DatabaseConfig(url=f"sqlite:///{db_path}", name="sample"),
-        detection=DetectionConfig(sample_size=10, use_history=True),
+        detection=DetectionConfig(sample_size=10, pattern_min_samples=1, use_history=True),
         history=HistoryConfig(enabled=True, url=f"sqlite:///{tmp_path / 'hist.db'}"),
         llm=LLMConfig(enabled=False),
         masking=MaskingConfig(dry_run=dry_run, seed="test"),

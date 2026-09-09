@@ -51,6 +51,7 @@ nav:
   - Guide:
       - Configuration: configuration.md
       - Historical decisions: history.md
+      - Pattern detection: detection.md
       - Masking strategies: strategies.md
       - The seed map: seed-map.md
       - Validation: validation.md

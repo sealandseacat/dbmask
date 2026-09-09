@@ -398,14 +398,13 @@ def test_fresh_manual_override_wins_over_import(cli_env):
 
 
 def test_runtime_expiration_retains_audit(store, monkeypatch):
-    import dbmask.history.records as module
 
     store.import_records([approved(expires_at="2090-01-01")])
     class Clock(datetime):
         @classmethod
         def now(cls, tz=None):
             return datetime(2090, 1, 1, tzinfo=timezone.utc)
-    monkeypatch.setattr(module, "datetime", Clock)
+    monkeypatch.setattr("dbmask.history.records.datetime", Clock)
     d = store.get("sample", "main", "customers", "email", current_type="TEXT")
     assert d.review_status == "pending"
     assert "expired" in d.detail

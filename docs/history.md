@@ -89,8 +89,8 @@ actual type rather than guessing. Custom connectors may implement
   Escape embedded pipes as `\|`; `<br>` represents a newline. Use XLSX/CSV for
   literal backslashes, literal `<br>` or edge whitespace that cannot round-trip.
 
-The repository includes [a CSV example](../config/history.example.csv) and
-[a Markdown example](../config/history.example.md) containing synthetic data.
+The repository includes [a CSV example](https://github.com/sealandseacat/dbmask/blob/main/config/history.example.csv) and
+[a Markdown example](https://github.com/sealandseacat/dbmask/blob/main/config/history.example.md) containing synthetic data.
 Remove or replace the example rows before importing your own decisions.
 
 ## Review and import

@@ -87,6 +87,8 @@ class DetectionConfig:
     sample_size: int = 100            # rows sampled per column for pattern matching
     use_patterns: bool = True
     use_history: bool = True
+    # Analyst who ran this analysis; separate from the eventual reviewer.
+    user_id: str = ""
     # Path to the field override file (sensitive/not-sensitive toggles).
     overrides_file: Optional[str] = None
     # Skip columns/tables by name regex (fully optional).
@@ -140,7 +142,7 @@ class SeedMapConfig:
 class MaskingConfig:
     """ETL / masking behaviour."""
 
-    # Per-column override (HIGHEST priority): force a specific strategy for a
+    # Per-column override (after an explicit reviewed strategy): select a strategy for a
     # given column. Keys may be "column", "table.column" or
     # "schema.table.column". This is where a user decides, e.g., to BLANK a long
     # `notes` field instead of randomizing it.

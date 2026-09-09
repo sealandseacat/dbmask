@@ -102,27 +102,29 @@ These are behaviors, not aspirations — each one has a regression test:
 
 ## How a decision is made
 
-For each column, layers run in priority order and stop at the first
-conclusive one. Every conclusive decision is persisted, so results are
-reproducible run over run:
+For each column, manual overrides take precedence. Historical decisions are
+reused only after review and while their type, expiry and strategy remain
+applicable. Machine suggestions stay pending until an analyst imports a
+reviewed file.
 
 ```mermaid
-flowchart LR
+flowchart TD
     A[Column] --> B{Manual override?}
-    B -- yes --> Z[Decision]
-    B -- no --> C{Seen before in history?}
-    C -- yes --> Z
-    C -- no --> D{Pattern matches values?}
-    D -- yes --> Z
-    D -- no --> E{LLM enabled?}
-    E -- yes --> F[Ask LLM] --> Z
-    E -- no --> G["UNKNOWN — needs review<br/>(not masked, not persisted)"]
-    Z --> H[(History store)]
+    B -->|yes| Z[Decision]
+    B -->|no| C{Imported history?}
+    C -->|approved and applicable| Z
+    C -->|pending or invalid| R[Human review required]
+    C -->|none| D[Patterns and optional LLM]
+    D --> S[Pending suggestions]
+    S --> H[Human review and file import]
+    H --> C
 ```
 
-- **Overrides** (`config/dbmask.fields.yaml`): a human decision always wins —
-  force a column sensitive (with a rule) or safe.
-- **History**: prior decisions are reused for consistency and speed.
+- **Overrides** (`config/dbmask.fields.yaml`): a human decision always wins.
+- **History**: exact database/schema/table/column records, separate analyst and
+  reviewer IDs, explicit masking strategies, expiry/type checks and revisions.
+  Import/export CSV, XLSX (`pip install "dbmask[excel]"`), or a strict Markdown
+  table. See [the history workflow](docs/history.md) for templates and migration.
 - **Patterns**: value-based heuristics (email, phone, SSN, credit card w/
   Luhn, UUID, IP, dates, names…) — free and deterministic.
 - **LLM (optional, off by default)**: for the long tail. Works with OpenAI or
@@ -165,7 +167,7 @@ yourself — `blank`, `redact`, or `format_random`:
 ```yaml
 masking:
   column_strategies:
-    notes: blank                 # your call, highest priority
+    notes: blank                 # used when no reviewed history strategy is set
   rule_strategies:
     email: fake_email            # per detected rule
   default_strategy: format_random

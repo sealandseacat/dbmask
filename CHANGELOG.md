@@ -7,6 +7,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Import/export historical decisions using CSV, XLSX (optional `excel` extra),
+  or a strict Markdown table. Records preserve analyst `user_id`, reviewer,
+  review dates, masking strategy, type baseline and expiry. Atomic imports
+  reject conflicting rows; revisions and explicit approved replacements
+  preserve prior decisions for audit. `scan --output` creates a review file.
+
+### Changed
+
+- Only approved, applicable imported history is reused. Automatic results and
+  legacy rows are pending suggestions, not approvals. Imported pending,
+  expired, type-changed or unavailable-strategy records require review.
+  Explicitly reviewed strategies cannot silently fall back to another method.
+  Existing history rows are retained without altering the legacy table.
+
 ### Fixed
 
 - **Date, city and street columns are no longer misclassified.** The `phone`

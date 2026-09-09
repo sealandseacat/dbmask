@@ -53,6 +53,14 @@ class Decision:
     detail: str = ""
     token_usage: int = 0
     decided_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Review metadata is independent of the tentative sensitivity/type.
+    user_id: str = ""
+    review_status: str = "pending"
+    reviewed_by: str = ""
+    reviewed_at: str = ""
+    masking_strategy: Optional[str] = None
+    data_type: str = ""
+    expires_at: str = ""
 
     @property
     def is_sensitive(self) -> bool:

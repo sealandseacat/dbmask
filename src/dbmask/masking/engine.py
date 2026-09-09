@@ -95,7 +95,8 @@ class MaskingEngine:
     def resolve_strategy(self, decision: Decision) -> str:
         """Pick the strategy name for a sensitive column.
 
-        Priority (first match wins):
+        An explicit ``decision.masking_strategy`` (from reviewed history) wins first.
+        Otherwise, priority is (first match wins):
           1. ``column_strategies`` — an explicit per-column choice the user made
              (e.g. blank a long ``notes`` field). Matched as
              ``schema.table.column`` -> ``table.column`` -> ``column``.
@@ -106,6 +107,13 @@ class MaskingEngine:
              (lets an override set ``rule: blank`` and have it just work).
           5. ``default_strategy`` — the catch-all.
         """
+        # An explicitly reviewed strategy must not be remapped by defaults or
+        # broad per-column settings. A fresh detection override still wins at
+        # the pipeline layer. Unknown explicit strategies fail, never fall back.
+        if decision.masking_strategy is not None:
+            get_strategy(decision.masking_strategy)
+            return decision.masking_strategy
+
         # 1) per-column user choice (most specific)
         for key in (
             f"{decision.schema}.{decision.table}.{decision.column}",

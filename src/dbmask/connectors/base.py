@@ -51,6 +51,10 @@ class Connector(ABC):
     def list_columns(self, schema: str, table: str) -> list[str]:
         """Return the column names of ``schema.table``."""
 
+    def column_type(self, schema: str, table: str, column: str) -> Optional[str]:
+        """Return the declared type for history drift checks, or None if unavailable."""
+        return None
+
     @abstractmethod
     def sample_values(
         self, schema: str, table: str, column: str, limit: int = 100

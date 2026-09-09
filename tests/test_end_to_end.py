@@ -66,14 +66,14 @@ def test_scan_detects_email_and_name(sqlite_db, tmp_path):
     assert by_col["full_name"].is_sensitive
 
 
-def test_history_reuse(sqlite_db, tmp_path):
+def test_unreviewed_history_is_reanalyzed(sqlite_db, tmp_path):
     cfg = _config(sqlite_db, tmp_path)
     with Runner(cfg) as runner:
         runner.scan()
-    # Second run should serve decisions from history.
+    # Automatic results remain pending and are re-analyzed until reviewed.
     with Runner(cfg) as runner:
         report = runner.scan()
-        assert runner.pipeline.stats.by_source.get("history", 0) > 0
+        assert runner.pipeline.stats.by_source.get("history", 0) == 0
     assert any(d.is_sensitive for d in report.decisions)
 
 

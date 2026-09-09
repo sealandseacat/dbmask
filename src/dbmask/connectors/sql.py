@@ -95,6 +95,13 @@ class SQLConnector(Connector):
         pk = inspector.get_pk_constraint(table, schema=schema)
         return list(pk.get("constrained_columns") or [])
 
+    def column_type(self, schema: str, table: str, column: str) -> Optional[str]:
+        inspector = inspect(self._require_engine())
+        for item in inspector.get_columns(table, schema=schema):
+            if item["name"] == column:
+                return str(item["type"])
+        raise KeyError(f"Column not found: {schema}.{table}.{column}")
+
     def _reflect(self, schema: str, table: str) -> Table:
         return Table(
             table,
@@ -319,4 +326,3 @@ class SQLConnector(Connector):
             "unique_constraints": unique,
             "check_constraints": check,
         }
-

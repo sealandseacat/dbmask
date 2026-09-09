@@ -54,6 +54,7 @@ detection:
   sample_size: 100              # values sampled per column for patterns
   use_patterns: true
   use_history: true
+  user_id: analyst-001          # analysis author, separate from reviewer
   overrides_file: config/dbmask.fields.yaml
   skip_column_patterns: []      # regex, case-insensitive: [".*_id$"]
   skip_table_patterns: []       # ["^tmp_", "_bkp$"]
@@ -83,9 +84,11 @@ Match precedence: `schema.table.column` → `table.column` → `column` →
 
 ## `history`
 
-Every conclusive decision is stored and reused on later runs, keeping
-masking reproducible and fast. `UNKNOWN` results are deliberately **not**
-stored — they are re-evaluated every run.
+Automatic results are stored as pending suggestions and re-analyzed on later
+runs. Only approved, applicable imported records are reused. Imported pending
+or invalidated records hold a column for review instead of falling through to
+automatic classification. See [Historical decisions](history.md) for the file
+schema, review workflow, revisions and migration.
 
 ```yaml
 history:
@@ -106,7 +109,7 @@ masking:
   dry_run: true                     # library default; the CLI enforces --apply anyway
   seed: ${DBMASK_SEED}              # PRIVATE seed -> deterministic masking
   default_strategy: format_random
-  column_strategies:                # highest priority, your explicit call
+  column_strategies:                # after an explicit reviewed history strategy
     notes: blank
     public.users.bio: redact
   rule_strategies:                  # per detected rule

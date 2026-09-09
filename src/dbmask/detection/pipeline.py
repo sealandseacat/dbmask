@@ -7,8 +7,8 @@ For each column we try, in order:
   3. **Pattern matching** — fast, free, deterministic value heuristics.
   4. **LLM** — only when everything above is inconclusive (and only if enabled).
 
-Whatever layer decides, the result is written back to history so the next run
-is faster and consistent. A token budget caps LLM spend.
+Automatic results are stored as pending suggestions. Only reviewed imports
+are reused on later runs. A token budget caps LLM spend.
 """
 from __future__ import annotations
 
@@ -81,21 +81,28 @@ class DetectionPipeline:
         self, connector: Connector, schema: str, table: str, column: str
     ) -> Decision:
         db = connector.name
+        type_reader = getattr(connector, "column_type", None)
+        data_type = (type_reader(schema, table, column) if type_reader else None) or ""
+
+        def finish(decision: Decision) -> Decision:
+            decision.data_type = data_type
+            decision.user_id = self.config.detection.user_id
+            return self._finalize(decision)
 
         # 1) Manual override wins outright.
         if decision := self.overrides.decide(db, schema, table, column):
-            return self._finalize(decision)
+            return finish(decision)
 
         # 2) History (consistency / reproducibility).
         if self.config.detection.use_history and self.history is not None:
-            prior = self.history.get(db, schema, table, column)
+            prior = self.history.get(db, schema, table, column, current_type=data_type)
             if prior is not None:
                 self.stats.record(prior)
                 return prior  # already persisted; do not rewrite
 
         # Configurable name-based skip (e.g. *_ID, audit columns).
         if self.should_skip_column(column):
-            return self._finalize(
+            return finish(
                 Decision(db, schema, table, column, Sensitivity.NOT_SENSITIVE,
                          source="skip", confidence=1.0, detail="Skipped by column name pattern")
             )
@@ -106,7 +113,7 @@ class DetectionPipeline:
         if self.config.detection.use_patterns and sample:
             match = self.patterns.match(sample)
             if match is not None:
-                return self._finalize(
+                return finish(
                     Decision(db, schema, table, column, Sensitivity.SENSITIVE,
                              rule=match.name, source="pattern", confidence=match.confidence,
                              detail=f"{match.ratio:.0%} of samples matched '{match.name}'")
@@ -114,7 +121,7 @@ class DetectionPipeline:
 
         # 4) LLM fallback.
         if self.llm is not None and sample:
-            return self._finalize(self._classify_with_llm(db, schema, table, column, sample))
+            return finish(self._classify_with_llm(db, schema, table, column, sample))
 
         # Nothing conclusive. "We could not tell" is NOT the same as "not
         # sensitive": the column is reported as UNKNOWN so a human can review
@@ -128,7 +135,7 @@ class DetectionPipeline:
         else:
             detail = "Column has no data to sample — nothing to analyze"
             source = "no_data"
-        return self._finalize(
+        return finish(
             Decision(db, schema, table, column, Sensitivity.UNKNOWN,
                      source=source, confidence=0.0, detail=detail)
         )

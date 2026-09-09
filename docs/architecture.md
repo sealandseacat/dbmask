@@ -18,7 +18,7 @@ flowchart TD
 
 | Piece | Job |
 |---|---|
-| [`cli.py`](https://github.com/sealandseacat/dbmask/blob/main/src/dbmask/cli.py) | The `dbmask` commands (`scan`, `mask`, `validate`, `history`, `seeds`, `strategies`). Owns all *safety UX*: `--apply` gating, redacted previews, warnings. |
+| [`cli.py`](https://github.com/sealandseacat/dbmask/blob/main/src/dbmask/cli.py) | The `dbmask` commands (`scan`, `mask`, `validate`, `history`, `history-import`, `history-export`, `seeds`, `strategies`). Owns all *safety UX*: `--apply` gating, redacted previews, warnings. |
 | [`config.py`](https://github.com/sealandseacat/dbmask/blob/main/src/dbmask/config.py) | Typed dataclasses for the YAML config, with `${ENV}` expansion. |
 | [`runner.py`](https://github.com/sealandseacat/dbmask/blob/main/src/dbmask/runner.py) | Orchestration and the fail-closed rules (an incomplete scan refuses to mask). The library entry point. |
 | [`connectors/`](https://github.com/sealandseacat/dbmask/tree/main/src/dbmask/connectors) | One SQLAlchemy code path for every dialect: introspection, sampling, keyset-paginated read→write (`iter_pages`), row updates. Subclass `Connector` for non-SQL sources. |
@@ -37,10 +37,13 @@ SHARED lock that blocks the writer's COMMIT.) Pages advance with an expanded
 row-value comparison, so composite keys work on engines without native
 row-value support.
 
-**Decisions are data.** Every conclusive classification is a `Decision` row
-in the history store — who decided (override/pattern/LLM/history), with what
-confidence, when. `dbmask scan --json` and `dbmask history` expose the same
-records for audit.
+**Reviewed history and suggestions are separate.** Conclusive scan results are
+pending suggestions, never automatic approval. File imports identify a column
+by its exact database/schema/table/column tuple. Only approved records with a
+matching declared type, an available strategy and an unexpired review are reused.
+An imported pending or invalid record produces `UNKNOWN` and needs review.
+Analyst/reviewer IDs, dates, reasons and prior imported revisions are retained.
+See [the history workflow](history.md).
 
 **Fail closed, everywhere.** Unanalyzed column → refuse to mask.
 Unclassifiable column → `UNKNOWN`, reported, untouched, re-examined next

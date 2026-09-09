@@ -50,6 +50,7 @@ nav:
   - Getting started: getting-started.md
   - Guide:
       - Configuration: configuration.md
+      - Historical decisions: history.md
       - Masking strategies: strategies.md
       - The seed map: seed-map.md
       - Validation: validation.md

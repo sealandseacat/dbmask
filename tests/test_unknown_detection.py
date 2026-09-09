@@ -68,7 +68,7 @@ def test_unknown_is_reevaluated_every_run(cli_env):
     cfg = _config(cli_env)
     with Runner(cfg) as runner:
         runner.scan()
-    # Second run: email/full_name come from history, status_code is re-analyzed.
+    # Second run: all unreviewed columns, including status_code, are re-analyzed.
     with Runner(cfg) as runner:
         report = runner.scan()
     d = {x.column: x for x in report.decisions}["status_code"]

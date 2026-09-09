@@ -162,7 +162,7 @@ class Runner:
             cols = [
                 (d.schema, d.table, d.column)
                 for d in self.history.all_decisions()
-                if d.is_sensitive
+                if d.is_sensitive and d.database == self.connector.name
             ]
             if cols:
                 return cols

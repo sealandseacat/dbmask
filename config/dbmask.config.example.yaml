@@ -28,6 +28,7 @@ detection:
   sample_size: 100           # rows sampled per column for pattern matching
   use_patterns: true
   use_history: true
+  user_id: analyst-001       # analyst ID; reviewed_by is stored separately
   overrides_file: config/dbmask.fields.yaml   # manual sensitive toggles
   # Optional: skip columns/tables purely by name (regex, case-insensitive).
   # Left empty by default; add your own only if you want name-based skipping.
@@ -35,7 +36,7 @@ detection:
   skip_table_patterns: []    # e.g. ["^tmp_", "_bkp$", "^audit_"]
 
 # --- 3. Historical decision store -------------------------------------------
-# Past decisions are reused so masking stays consistent and runs get faster.
+# Only approved, applicable imported decisions are reused. See docs/history.md.
 history:
   enabled: true
   url: "sqlite:///dbmask_history.db"   # any SQLAlchemy URL works
@@ -94,7 +95,7 @@ masking:
     # Quoted because bare `null` is a YAML null, not the strategy named "null".
     untracked_strategies: ["null", "blank", "redact"]
 
-  # (A) HIGHEST priority — decide the strategy for a SPECIFIC column yourself.
+  # (A) After an explicit reviewed history strategy: choose for a SPECIFIC column.
   # This is where you choose, e.g., to BLANK a long free-text note instead of
   # randomizing it. Keys can be "column", "table.column" or "schema.table.column".
   column_strategies:

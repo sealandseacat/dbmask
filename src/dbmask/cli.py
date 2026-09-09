@@ -67,12 +67,34 @@ def _warn_llm_data_egress(config: Config) -> None:
 @cli.command()
 @click.option("--config", "config_path", required=True, help="Path to config YAML.")
 @click.option("--json", "as_json", is_flag=True, help="Emit decisions as JSON.")
-def scan(config_path: str, as_json: bool) -> None:
+@click.option("--output", type=click.Path(dir_okay=False), help="Export a review worksheet (.csv/.xlsx/.md).")
+def scan(config_path: str, as_json: bool, output: str) -> None:
     """Classify every column as sensitive or not (no data is modified)."""
     config = _load(config_path)
     _warn_llm_data_egress(config)
     with Runner(config) as runner:
         report = runner.scan()
+        with_history = ({r.key: r for r in runner.history.records_for_review()}
+                        if output and runner.history else {})
+
+    if output:
+        from dataclasses import replace
+
+        from dbmask.history.files import write_history_file
+        from dbmask.history.records import HistoryRecord
+
+        records = []
+        for decision in report.decisions:
+            record = HistoryRecord.from_decision(decision)
+            stored = with_history.get(record.key)
+            if stored and decision.source in {"history", "history_pending"}:
+                records.append(stored)
+            else:
+                records.append(replace(record, revision=stored.revision if stored else 0))
+        try:
+            write_history_file(output, records)
+        except (ValueError, OSError) as exc:
+            raise click.ClickException(str(exc)) from exc
 
     if as_json:
         click.echo(json.dumps([d.to_dict() for d in report.decisions], indent=2))
@@ -87,6 +109,8 @@ def scan(config_path: str, as_json: bool) -> None:
             rule = f" -> {d.rule}" if d.rule else ""
             click.echo(f"[{flag:9}] {d.schema}.{d.table}.{d.column}{rule} "
                        f"({d.source}, conf={d.confidence:.2f})")
+            if d.source == "history_pending":
+                click.echo(f"  Review required: {d.detail}")
         s = runner.pipeline.stats
         click.echo("\n--- Summary ---")
         click.echo(f"Columns analyzed : {s.total}")
@@ -204,7 +228,9 @@ def mask(config_path: str, apply: bool, allow_partial: bool, show_values: bool) 
 
 @cli.command()
 @click.option("--config", "config_path", required=True, help="Path to config YAML.")
-def history(config_path: str) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Emit records including review metadata.")
+@click.option("--audit", is_flag=True, help="Show imported record revisions as JSON.")
+def history(config_path: str, as_json: bool, audit: bool) -> None:
     """Show all decisions recorded in the history store."""
     config = _load(config_path)
     from dbmask.history.store import HistoryStore
@@ -213,9 +239,13 @@ def history(config_path: str) -> None:
         click.echo("History is disabled in config.")
         return
     with HistoryStore(config.history.url) as store:
+        if audit or as_json:
+            records = store.audit_records() if audit else [r.to_dict() for r in store.records_for_review()]
+            click.echo(json.dumps(records, indent=2))
+            return
         for d in store.all_decisions():
             rule = f" -> {d.rule}" if d.rule else ""
-            click.echo(f"{d.key}: {d.sensitivity.value}{rule} ({d.source})")
+            click.echo(f"{d.key}: {d.sensitivity.value}{rule} ({d.source}, {d.review_status}, user_id={d.user_id})")
 
 
 @cli.command()
@@ -253,6 +283,49 @@ def seeds(config_path: str, limit: int, as_json: bool) -> None:
             click.echo(f"{p['seed']:18} {p['scope']:18} {p['masked_value']}")
     if total > len(pairs):
         click.echo(f"\n... {total - len(pairs)} more (use --limit).")
+
+
+@cli.command("history-import")
+@click.option("--config", "config_path", required=True, help="Path to config YAML.")
+@click.option("--file", "input_path", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--sheet", default="history", show_default=True, help="XLSX worksheet name.")
+@click.option("--dry-run", is_flag=True, help="Validate the full batch without changing decision records.")
+@click.option("--replace-approved", is_flag=True, help="Explicitly replace an approved record at its exported revision.")
+def history_import(config_path: str, input_path: str, sheet: str, dry_run: bool, replace_approved: bool) -> None:
+    """Import reviewed historical decisions; never changes the source data."""
+    from dbmask.history.files import read_history_file
+    from dbmask.history.store import HistoryStore
+
+    config = _load(config_path)
+    if not config.history.enabled:
+        raise click.ClickException("History is disabled in config.")
+    try:
+        records = read_history_file(input_path, sheet=sheet)
+        with HistoryStore(config.history.url) as store:
+            result = store.import_records(records, dry_run=dry_run, replace_approved=replace_approved)
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, indent=2))
+
+
+@cli.command("history-export")
+@click.option("--config", "config_path", required=True, help="Path to config YAML.")
+@click.option("--output", required=True, type=click.Path(dir_okay=False))
+def history_export(config_path: str, output: str) -> None:
+    """Export current records, suggestions and legacy evidence for human review."""
+    from dbmask.history.files import write_history_file
+    from dbmask.history.store import HistoryStore
+
+    config = _load(config_path)
+    if not config.history.enabled:
+        raise click.ClickException("History is disabled in config.")
+    try:
+        with HistoryStore(config.history.url) as store:
+            records = store.records_for_review()
+        write_history_file(output, records)
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Exported {len(records)} records to {output}")
 
 
 @cli.command()

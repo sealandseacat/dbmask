@@ -53,6 +53,9 @@ oracle = ["oracledb>=2.0"]
 # everything-database meta extra
 databases = ["psycopg2-binary>=2.9", "PyMySQL>=1.1", "pyodbc>=5.0", "oracledb>=2.0"]
 
+# Local history spreadsheets
+excel = ["openpyxl>=3.1.5"]
+
 # LLM providers
 openai = ["openai>=1.0", "tiktoken>=0.5"]
 local = ["requests>=2.31"]
@@ -60,10 +63,11 @@ local = ["requests>=2.31"]
 # Convenience: install everything
 all = [
     "psycopg2-binary>=2.9", "PyMySQL>=1.1", "pyodbc>=5.0", "oracledb>=2.0",
-    "openai>=1.0", "tiktoken>=0.5", "requests>=2.31",
+    "openai>=1.0", "tiktoken>=0.5", "requests>=2.31", "openpyxl>=3.1.5",
 ]
 
 dev = [
+    "openpyxl>=3.1.5",
     "pytest>=7.4",
     "pytest-cov>=4.1",
     "ruff>=0.8",

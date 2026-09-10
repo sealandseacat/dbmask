@@ -3,7 +3,8 @@
 # ----------------------------------------------------------------------------
 # Anything listed here OVERRIDES the automatic detection (patterns/LLM/history).
 # Match targets, most specific first:
-#   - "schema.table.column"   exact column
+#   - database/schema/table/column fields: exact, case-preserving scope
+#   - "schema.table.column"   exact column in ANY database
 #   - "table.column"          column in any schema
 #   - "column"                that column name anywhere
 #   - "pattern:glob"          glob on the column name (e.g. pattern:*_ssn)
@@ -35,3 +36,13 @@ not_sensitive:
   - match: "public.orders.order_number"
     note: "Looks like an ID but is safe to keep"
   - "internal_status_code"
+
+# For database-specific overrides, add entries like this under sensitive above:
+#   - database: database-A
+#     schema: main
+#     table: accounts
+#     column: account_number
+#     rule: account_number
+#     masking_strategy: redact
+#     note: Applies only to database A; approve the exported review to persist it
+# Do not combine database-scoped fields with match/name aliases.

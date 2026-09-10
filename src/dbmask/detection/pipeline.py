@@ -21,7 +21,7 @@ from dbmask.connectors.base import Connector
 from dbmask.detection.overrides import FieldOverrides
 from dbmask.detection.patterns import PatternAnalysis, PatternMatcher
 from dbmask.detection.result import Decision, Sensitivity
-from dbmask.history.store import HistoryStore
+from dbmask.history.backend import HistoryBackend
 from dbmask.llm.base import LLMProvider
 
 
@@ -55,7 +55,7 @@ class DetectionPipeline:
     def __init__(
         self,
         config: Config,
-        history: Optional[HistoryStore] = None,
+        history: Optional[HistoryBackend] = None,
         overrides: Optional[FieldOverrides] = None,
         patterns: Optional[PatternMatcher] = None,
         llm: Optional[LLMProvider] = None,

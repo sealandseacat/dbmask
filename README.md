@@ -124,7 +124,9 @@ flowchart TD
 - **History**: exact database/schema/table/column records, separate analyst and
   reviewer IDs, explicit masking strategies, expiry/type checks and revisions.
   Import/export CSV, XLSX (`pip install "dbmask[excel]"`), or a strict Markdown
-  table. See [the history workflow](docs/history.md) for templates and migration.
+  table. Set `history.source_file` to keep that original file authoritative;
+  `history-writeback` merges human-approved review rows back into it with a
+  backup and conflict checks. See [the history workflow](docs/history.md).
 - **Patterns**: explicit format checks plus column-name and database-type
   context, with no weighted winner selection. Defaults: at least 20 nonblank
   samples and a match ratio of at least 90%. Reports show counts and ratios

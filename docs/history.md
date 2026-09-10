@@ -93,7 +93,152 @@ The repository includes [a CSV example](https://github.com/sealandseacat/dbmask/
 [a Markdown example](https://github.com/sealandseacat/dbmask/blob/main/config/history.example.md) containing synthetic data.
 Remove or replace the example rows before importing your own decisions.
 
-## Review and import
+## Write decisions back to the original file
+
+Use this mode when your CSV, XLSX or Markdown file should remain the source
+of truth. It is opt-in; without `source_file`, the SQL workflow below remains
+unchanged. No SQL history database is created or synchronized in file mode.
+Existing SQL stores remain available if you switch back, but contain only
+their own records; export/import explicitly if migrating decisions between modes.
+
+```yaml
+database:
+  url: sqlite:///demo.db
+  name: database-A             # unique, stable name; part of every record key
+history:
+  enabled: true
+  source_file: history/master.xlsx
+  sheet: history              # source worksheet; can be a custom name
+  # url is unused while source_file is configured
+detection:
+  use_history: true
+  user_id: analyst-001
+```
+
+`source_file` is resolved relative to the YAML config file. Supply an existing
+file in the schema above; a header-only file is valid for an empty master.
+The CLI `--file`/`--output` paths are relative to the working directory.
+Each scan reads the master afresh. It reuses applicable approved records by
+exact database/schema/table/column, then uses patterns and optional LLM for
+columns without history. Imported pending/superseded rows still hold review.
+Explicit detection overrides still have first priority.
+
+1. Validate and load the original file (this command does not rewrite it):
+
+   ```bash
+   dbmask history-import --config dbmask.yaml --file history/master.xlsx
+   ```
+
+   File mode uses the configured source `sheet`. `history-import` accepts that
+   original file only; subsequent reviews use `history-writeback`.
+
+2. Scan and export a separate review worksheet:
+
+   ```bash
+   dbmask scan --config dbmask.yaml --output review.xlsx
+   ```
+
+   This creates `review.xlsx` and `review.xlsx.dbmask.json`. Keep them together.
+   The companion identifies the original source, its content hash, the exported
+   locations, revisions and analysis metadata. Do not edit it. The worksheet
+   contains no raw database samples; pattern evidence remains in `reason`.
+   Set `detection.user_id` before export. Scan does not write suggestions into
+   the master; in file mode they survive through this review export.
+
+3. Review the worksheet's `history` sheet. Set `decision=mask` with a registered
+   `masking_strategy`, or `decision=keep` with an empty strategy. Edit the reason,
+   type label and expiry if needed. Mark only reviewed rows `approved`.
+   `reviewed_by` and `reviewed_at` are filled by the next command for changed
+   approvals. Keep the exported database/schema/table/column, `revision`,
+   `user_id`, `analysis_date` and `data_type` unchanged. To refresh a type
+   baseline, scan again; a type-changed historical row is exported as pending
+   with today's declared type and analyst. Close Excel before continuing.
+
+4. Preview, then save the reviewed changes to the original file:
+
+   ```bash
+   dbmask history-writeback --config dbmask.yaml --file review.xlsx --reviewed-by siyuan
+   dbmask history-writeback --config dbmask.yaml --file review.xlsx --reviewed-by siyuan --apply
+   dbmask history --config dbmask.yaml --json
+   dbmask scan --config dbmask.yaml
+   ```
+
+   `--sheet` on writeback selects the review sheet, default `history`; the source
+   sheet comes from config. Both files can independently be CSV, XLSX or MD.
+   The preview lists old/new decisions, strategies and scopes. The applying
+   command stamps its reviewer/time, increments changed revisions and reports
+   the backup filename. No `--apply` means no writes or backup creation.
+
+Only approved rows are merged. Pending/superseded or omitted review rows do
+not delete, revoke or replace an existing approval. Unchanged approvals keep
+their reviewer, date and revision. To revise an approval, change its decision,
+strategy or rationale and approve it; `history-export --output current.xlsx`
+can prepare a review without connecting to the data database. Use `scan` when
+you need current column types or fresh pattern/LLM suggestions.
+
+The whole review is validated before writing. Duplicate rows, altered scope
+or analysis fields, stale revisions, unavailable strategies and expired new
+approvals reject the batch. If the original file changed since export, export
+again and reconcile the changes; a second apply of an already-used review
+also needs a fresh export. Never bypass the companion/hash check to force an
+old decision onto newer history. Reviewer names and the companion are audit
+metadata and conflict detection, not authentication or cryptographic approval.
+
+Writeback merges exact keys, so a mask decision in database A cannot overwrite
+a keep decision in database B. Unrelated records stay present. It takes an
+exclusive `.dbmask.lock`, validates a staged file by reading it back, saves an
+exact pre-write `.bak` snapshot, and atomically replaces the original. An I/O
+failure before replacement leaves the source unchanged. Close spreadsheet
+editors and do not edit the master during writeback: the lock serializes
+other dbmask writers, not external editors. After a process crash, remove a
+leftover lock only after confirming no writer is still running.
+
+CSV/MD output may normalize serialization while preserving record contents.
+XLSX updates the named worksheet and retains other sheets and ordinary cell
+formatting/comments/formulas outside the history sheet. It is not a byte-for-byte
+Excel editor: advanced workbook features unsupported by openpyxl may change;
+use a plain history workbook and keep the backup. Formula cells in the history
+sheet remain disallowed. File-mode audit is the master revisions plus backups;
+`history --audit` remains SQL-only. Restore by copying a backup over the master
+with its original extension while dbmask is stopped, then export fresh reviews.
+
+This workflow persists decisions, not the underlying database values. Actual
+masking is still a separate `dbmask mask` preview followed by `--apply` on a
+disposable database copy. The masking command retains its existing behavior:
+new pattern/LLM suggestions can drive a run, so complete review first; unknown
+and held columns are reported and remain unmasked.
+
+### Database-scoped YAML overrides
+
+For overrides that must apply to only one database, use explicit fields:
+
+```yaml
+sensitive:
+  - database: database-A
+    schema: main
+    table: accounts
+    column: account_number
+    rule: account_number
+    masking_strategy: redact
+    note: Human decision for database A
+not_sensitive:
+  - database: database-B
+    schema: main
+    table: accounts
+    column: account_number
+    note: Human decision for database B
+```
+
+All four fields are literal and case-sensitive, including embedded dots; an
+empty schema is allowed when it matches the connector. This form takes priority
+over legacy `match` entries. Do not combine it with `match`/`name` aliases.
+Legacy shorthand/globs remain supported and can apply across databases.
+Overrides appear as pending suggestions in the scan review; explicitly approve
+and write them back to persist them. Once saved, those exact historical decisions
+can be reused after removing the temporary override file. `redact` here is a
+text masking example, not encryption; choose a type-compatible strategy.
+
+## SQL history: review and import
 
 Create a worksheet of the current scan, including unknown/empty columns:
 
@@ -142,7 +287,7 @@ Explicitly reviewed `masking_strategy` wins over broad `column_strategies`,
 wins before history. Setting `use_history: false` explicitly bypasses all
 history, including imported review holds.
 
-## Corrections, conflicts and audit
+## SQL history: corrections, conflicts and audit
 
 Identical rows/imports are idempotent. Different rows for the same column in
 one file are rejected regardless of row order (even if one is superseded).

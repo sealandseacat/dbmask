@@ -9,6 +9,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Optional `history.source_file` mode: load the original CSV/XLSX/MD each run,
+  export a review plus source/analysis companion, then `history-writeback`
+  previews and merges approved rows into that file. Exact keys, revision/hash
+  checks, pre-write backups and staged replacement preserve other database
+  decisions. XLSX updates the configured sheet instead of replacing the book.
+- Database-scoped YAML overrides with explicit database/schema/table/column
+  fields and optional `masking_strategy`; reviewed overrides can be persisted
+  to the original file without being hidden by older imported approvals.
+
 - Contextual pattern evidence in CLI/JSON and review-export reasons: hit counts,
   nonblank distinct-sample counts, unweighted ratios and rejection reasons.
 - Adapted date regression tests from PR #25 by **1cbyc** and **insisong**,

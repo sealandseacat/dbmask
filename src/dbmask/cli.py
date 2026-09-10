@@ -12,12 +12,16 @@ from __future__ import annotations
 
 import json
 import sys
+from contextlib import contextmanager
 
 import click
 
 from dbmask import __version__
 from dbmask.config import Config
 from dbmask.detection.result import Sensitivity
+from dbmask.history.backend import history_backend
+from dbmask.history.file_store import FileHistoryStore
+from dbmask.history.records import HistoryValidationError
 from dbmask.runner import Runner
 
 
@@ -33,6 +37,15 @@ def _load(config_path: str) -> Config:
     except Exception as exc:  # noqa: BLE001
         click.echo(f"[error] Failed to load config '{config_path}': {exc}", err=True)
         sys.exit(2)
+
+
+@contextmanager
+def _runner(config: Config):
+    try:
+        with Runner(config) as runner:
+            yield runner
+    except (ValueError, KeyError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _shape_only(value) -> object:
@@ -72,7 +85,9 @@ def scan(config_path: str, as_json: bool, output: str) -> None:
     """Classify every column as sensitive or not (no data is modified)."""
     config = _load(config_path)
     _warn_llm_data_egress(config)
-    with Runner(config) as runner:
+    if output and config.history.source_file and not config.detection.user_id.strip():
+        raise click.ClickException("Set detection.user_id before exporting a file-history review")
+    with _runner(config) as runner:
         report = runner.scan()
         with_history = ({r.key: r for r in runner.history.records_for_review()}
                         if output and runner.history else {})
@@ -90,11 +105,22 @@ def scan(config_path: str, as_json: bool, output: str) -> None:
                 record = replace(record, masking_strategy=runner.masker.resolve_strategy(decision))
             stored = with_history.get(record.key)
             if stored and decision.source in {"history", "history_pending"}:
+                if isinstance(runner.history, FileHistoryStore) and stored.review_status != "approved":
+                    from datetime import datetime, timezone
+
+                    stored = replace(stored, user_id=config.detection.user_id,
+                                     analysis_date=datetime.now(timezone.utc).isoformat())
                 records.append(stored)
             else:
                 records.append(replace(record, revision=stored.revision if stored else 0))
         try:
-            write_history_file(output, records)
+            if isinstance(runner.history, FileHistoryStore):
+                from dbmask.history.writeback import export_review
+
+                export_review(runner.history, output, records)
+                click.echo(f"Review exported to {output}; keep its .dbmask.json companion", err=True)
+            else:
+                write_history_file(output, records)
         except (ValueError, OSError) as exc:
             raise click.ClickException(str(exc)) from exc
 
@@ -171,7 +197,7 @@ def mask(config_path: str, apply: bool, allow_partial: bool, show_values: bool) 
     # database while the CLI printed "DRY-RUN (no changes written)".
     config.masking.dry_run = not apply
 
-    with Runner(config) as runner:
+    with _runner(config) as runner:
         report = runner.scan()
         for err in report.errors:
             click.echo(f"[error] scan: {err}", err=True)
@@ -246,12 +272,12 @@ def mask(config_path: str, apply: bool, allow_partial: bool, show_values: bool) 
 def history(config_path: str, as_json: bool, audit: bool) -> None:
     """Show all decisions recorded in the history store."""
     config = _load(config_path)
-    from dbmask.history.store import HistoryStore
-
     if not config.history.enabled:
         click.echo("History is disabled in config.")
         return
-    with HistoryStore(config.history.url) as store:
+    with history_backend(config.history) as store:
+        if audit and isinstance(store, FileHistoryStore):
+            raise click.ClickException("File history uses .bak snapshots; --audit is SQL-only")
         if audit or as_json:
             records = store.audit_records() if audit else [r.to_dict() for r in store.records_for_review()]
             click.echo(json.dumps(records, indent=2))
@@ -313,6 +339,23 @@ def history_import(config_path: str, input_path: str, sheet: str, dry_run: bool,
     if not config.history.enabled:
         raise click.ClickException("History is disabled in config.")
     try:
+        if config.history.source_file:
+            from pathlib import Path
+
+            if Path(input_path).resolve() != Path(config.history.source_file):
+                raise HistoryValidationError(
+                    "File mode reads history.source_file directly. To save an exported review, "
+                    "use history-writeback; SQL history-import is available without source_file"
+                )
+            with FileHistoryStore(config.history.source_file, sheet=config.history.sheet) as file_store:
+                rows = file_store.records_for_review()
+                result = {"source_file": str(file_store.path), "records": len(rows),
+                          "approved": sum(r.review_status == "approved" for r in rows),
+                          "pending": sum(r.review_status == "pending" for r in rows),
+                          "warnings": [r.reason for r in rows if r != file_store.original[r.key]],
+                          "dry_run": dry_run, "written": False}
+            click.echo(json.dumps(result, indent=2))
+            return
         records = read_history_file(input_path, sheet=sheet)
         with HistoryStore(config.history.url) as store:
             result = store.import_records(records, dry_run=dry_run, replace_approved=replace_approved)
@@ -327,18 +370,43 @@ def history_import(config_path: str, input_path: str, sheet: str, dry_run: bool,
 def history_export(config_path: str, output: str) -> None:
     """Export current records, suggestions and legacy evidence for human review."""
     from dbmask.history.files import write_history_file
-    from dbmask.history.store import HistoryStore
 
     config = _load(config_path)
     if not config.history.enabled:
         raise click.ClickException("History is disabled in config.")
     try:
-        with HistoryStore(config.history.url) as store:
+        with history_backend(config.history) as store:
             records = store.records_for_review()
-        write_history_file(output, records)
+        if isinstance(store, FileHistoryStore):
+            from dbmask.history.writeback import export_review
+
+            export_review(store, output, records)
+        else:
+            write_history_file(output, records)
     except (ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(f"Exported {len(records)} records to {output}")
+
+
+@cli.command("history-writeback")
+@click.option("--config", "config_path", required=True, help="Path to config YAML.")
+@click.option("--file", "input_path", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--sheet", default="history", show_default=True, help="Review worksheet (source sheet is configured).")
+@click.option("--reviewed-by", required=True, help="Person approving the changed decisions.")
+@click.option("--apply", is_flag=True, help="Merge approved rows into the original history file; otherwise preview.")
+def history_writeback(config_path: str, input_path: str, sheet: str, reviewed_by: str, apply: bool) -> None:
+    """Save human-reviewed decisions to the configured original CSV/XLSX/MD."""
+    from dbmask.history.writeback import writeback
+
+    config = _load(config_path)
+    if not config.history.enabled or not config.history.source_file:
+        raise click.ClickException("history-writeback requires enabled history.source_file")
+    try:
+        with FileHistoryStore(config.history.source_file, sheet=config.history.sheet) as store:
+            result = writeback(store, input_path, reviewed_by=reviewed_by, apply=apply, sheet=sheet)
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 @cli.command()
@@ -363,7 +431,7 @@ def validate(config_path: str, as_json: bool, strict: bool) -> None:
     Exits non-zero if any check fails (handy for CI / Jenkins gates).
     """
     config = _load(config_path)
-    with Runner(config) as runner:
+    with _runner(config) as runner:
         report = runner.validate()
 
     passed = report.passed_strict if strict else report.passed

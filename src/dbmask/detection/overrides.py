@@ -4,10 +4,11 @@ A YAML file lets a human force a column to be treated as sensitive (with a
 specific rule) or explicitly mark it as safe, overriding every automatic
 layer. Overrides are matched in priority order:
 
-  1. exact ``schema.table.column``
-  2. ``table.column``
-  3. ``column`` (applies everywhere with that column name)
-  4. glob/regex column-name patterns
+  1. exact database/schema/table/column fields (case-preserving)
+  2. exact ``schema.table.column`` (legacy, any database)
+  3. ``table.column``
+  4. ``column`` (applies everywhere with that column name)
+  5. glob column-name patterns
 
 See ``config/dbmask.fields.example.yaml`` for the file format.
 """
@@ -21,6 +22,7 @@ from typing import Optional
 import yaml
 
 from dbmask.detection.result import Decision, Sensitivity
+from dbmask.masking.rules import get_strategy
 
 
 @dataclass
@@ -28,12 +30,14 @@ class OverrideEntry:
     sensitive: bool
     rule: Optional[str] = None
     note: str = ""
+    masking_strategy: Optional[str] = None
 
 
 class FieldOverrides:
     """Loads and applies user-defined sensitivity toggles."""
 
     def __init__(self) -> None:
+        self.scoped: dict[tuple[str, str, str, str], OverrideEntry] = {}
         self.exact: dict[str, OverrideEntry] = {}
         self.table_column: dict[str, OverrideEntry] = {}
         self.column: dict[str, OverrideEntry] = {}
@@ -68,7 +72,28 @@ class FieldOverrides:
                 sensitive=sensitive,
                 rule=raw.get("rule"),
                 note=raw.get("note", ""),
+                masking_strategy=raw.get("masking_strategy"),
             )
+            if entry.masking_strategy is not None:
+                if not sensitive:
+                    raise ValueError("not_sensitive overrides must not specify masking_strategy")
+                try:
+                    get_strategy(entry.masking_strategy)
+                except KeyError as exc:
+                    raise ValueError(str(exc)) from exc
+            if "database" in raw:
+                fields = ("database", "schema", "table", "column")
+                if any(not isinstance(raw.get(f), str) for f in fields) or any(
+                    not raw[f].strip() for f in ("database", "table", "column")
+                ):
+                    raise ValueError("Scoped overrides require database/schema/table/column text fields")
+                if "match" in raw or "name" in raw:
+                    raise ValueError("Scoped overrides use exact fields, not match/name aliases")
+                key = (raw["database"], raw["schema"], raw["table"], raw["column"])
+                if key in self.scoped:
+                    raise ValueError("Duplicate database-scoped override")
+                self.scoped[key] = entry
+                return
         if not target:
             return
         target = str(target).lower()
@@ -82,7 +107,11 @@ class FieldOverrides:
             self.column[target] = entry
 
     # -- lookup ---------------------------------------------------------------
-    def lookup(self, schema: str, table: str, column: str) -> Optional[OverrideEntry]:
+    def lookup(
+        self, schema: str, table: str, column: str, *, database: Optional[str] = None,
+    ) -> Optional[OverrideEntry]:
+        if database is not None and (database, schema, table, column) in self.scoped:
+            return self.scoped[(database, schema, table, column)]
         s, t, c = schema.lower(), table.lower(), column.lower()
         for key, store in (
             (f"{s}.{t}.{c}", self.exact),
@@ -97,7 +126,7 @@ class FieldOverrides:
         return None
 
     def decide(self, database: str, schema: str, table: str, column: str) -> Optional[Decision]:
-        entry = self.lookup(schema, table, column)
+        entry = self.lookup(schema, table, column, database=database)
         if entry is None:
             return None
         return Decision(
@@ -110,4 +139,5 @@ class FieldOverrides:
             source="override",
             confidence=1.0,
             detail=entry.note or "Manual field override",
+            masking_strategy=entry.masking_strategy if entry.sensitive else None,
         )

@@ -43,6 +43,10 @@ detection:
 history:
   enabled: true
   url: "sqlite:///dbmask_history.db"   # any SQLAlchemy URL works
+  # To keep decisions in the original file instead of SQL, uncomment:
+  # source_file: ../history/master.xlsx  # relative to this YAML file
+  # sheet: history                      # source Excel worksheet
+  # Then scan --output review.xlsx; review; history-writeback ... --apply.
 
 # --- 4. LLM fallback — only used when patterns/history are inconclusive ------
 # Talk to OpenAI directly, an OpenAI-compatible gateway, or a fully local

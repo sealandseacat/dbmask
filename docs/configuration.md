@@ -102,7 +102,14 @@ schema, review workflow, revisions and migration.
 history:
   enabled: true
   url: "sqlite:///dbmask_history.db"   # any SQLAlchemy URL
+  # source_file: history/master.xlsx # optional original CSV/XLSX/MD; replaces SQL mode
+  # sheet: history                   # source Excel worksheet
 ```
+
+When `source_file` is set, it is relative to the config file and is the only
+authoritative history source. Scans read it; `history-writeback` merges approved
+review rows back into it after a preview and backup. See the
+[file review workflow](history.md#write-decisions-back-to-the-original-file).
 
 ## `llm`
 

@@ -119,6 +119,9 @@ class HistoryConfig:
     enabled: bool = True
     # Any SQLAlchemy URL; defaults to a local SQLite file.
     url: str = "sqlite:///dbmask_history.db"
+    # Optional authoritative original CSV/XLSX/MD; URL is unused in file mode.
+    source_file: Optional[str] = None
+    sheet: str = "history"
 
 
 @dataclass
@@ -258,4 +261,10 @@ class Config:
             raise FileNotFoundError(f"Config file not found: {path}")
         with path.open("r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
-        return cls.from_dict(data)
+        config = cls.from_dict(data)
+        if config.history.source_file:
+            source = Path(config.history.source_file).expanduser()
+            if not source.is_absolute():
+                source = path.resolve().parent / source
+            config.history.source_file = str(source.resolve())
+        return config

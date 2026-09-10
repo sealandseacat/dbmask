@@ -18,12 +18,12 @@ flowchart TD
 
 | Piece | Job |
 |---|---|
-| [`cli.py`](https://github.com/sealandseacat/dbmask/blob/main/src/dbmask/cli.py) | The `dbmask` commands (`scan`, `mask`, `validate`, `history`, `history-import`, `history-export`, `seeds`, `strategies`). Owns all *safety UX*: `--apply` gating, redacted previews, warnings. |
+| [`cli.py`](https://github.com/sealandseacat/dbmask/blob/main/src/dbmask/cli.py) | The `dbmask` commands (`scan`, `mask`, `validate`, `history`, `history-import`, `history-export`, `history-writeback`, `seeds`, `strategies`). Owns all *safety UX*: `--apply` gating, redacted previews, warnings. |
 | [`config.py`](https://github.com/sealandseacat/dbmask/blob/main/src/dbmask/config.py) | Typed dataclasses for the YAML config, with `${ENV}` expansion. |
 | [`runner.py`](https://github.com/sealandseacat/dbmask/blob/main/src/dbmask/runner.py) | Orchestration and the fail-closed rules (an incomplete scan refuses to mask). The library entry point. |
 | [`connectors/`](https://github.com/sealandseacat/dbmask/tree/main/src/dbmask/connectors) | One SQLAlchemy code path for every dialect: introspection, sampling, keyset-paginated read→write (`iter_pages`), row updates. Subclass `Connector` for non-SQL sources. |
 | [`detection/`](https://github.com/sealandseacat/dbmask/tree/main/src/dbmask/detection) | The layered pipeline: overrides → history → patterns → LLM → `UNKNOWN`. |
-| [`history/`](https://github.com/sealandseacat/dbmask/tree/main/src/dbmask/history) | Decision store (any SQLAlchemy URL). Reproducibility and auditability. |
+| [`history/`](https://github.com/sealandseacat/dbmask/tree/main/src/dbmask/history) | Decision store (SQLAlchemy URL or configured original file). Explicit review, exact scopes, revisions and writeback. |
 | [`llm/`](https://github.com/sealandseacat/dbmask/tree/main/src/dbmask/llm) | OpenAI-compatible + local providers behind one interface. |
 | [`masking/`](https://github.com/sealandseacat/dbmask/tree/main/src/dbmask/masking) | Strategies, bundled dictionaries, the seed map, and the page-by-page ETL engine. |
 | [`validation/`](https://github.com/sealandseacat/dbmask/tree/main/src/dbmask/validation) | Row counts, schema comparison, PK-aligned completeness. |

@@ -9,7 +9,7 @@ from dbmask.connectors.sql import SQLConnector
 from dbmask.detection.overrides import FieldOverrides
 from dbmask.detection.pipeline import DetectionPipeline, TokenBudgetExceeded
 from dbmask.detection.result import Decision
-from dbmask.history.store import HistoryStore
+from dbmask.history.backend import HistoryBackend, history_backend
 from dbmask.llm.factory import create_provider
 from dbmask.masking.engine import MaskingEngine, TableMaskResult
 from dbmask.validation.result import ValidationReport
@@ -49,8 +49,8 @@ class Runner:
     def __init__(self, config: Config):
         self.config = config
         self.connector = SQLConnector(config.database)
-        self.history: Optional[HistoryStore] = (
-            HistoryStore(config.history.url) if config.history.enabled else None
+        self.history: Optional[HistoryBackend] = (
+            history_backend(config.history) if config.history.enabled else None
         )
         overrides = FieldOverrides.load(config.detection.overrides_file)
         llm = create_provider(config.llm)
@@ -66,7 +66,11 @@ class Runner:
     def open(self) -> None:
         self.connector.connect()
         if self.history is not None:
-            self.history.connect()
+            try:
+                self.history.connect()
+            except Exception:
+                self.close()
+                raise
 
     def close(self) -> None:
         self.connector.close()

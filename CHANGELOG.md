@@ -39,6 +39,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Masking now uses constrained phone/SSN generators and brand/length/Luhn-valid
+  card replacements, with column-aware first/last-name defaults. Strict date,
+  phone, SSN and card strategies reject invalid nonempty input; the engine
+  rejects unchanged replacements. Review exports include the resolved strategy.
+  See `docs/strategies.md` for seed-map migration and batch-failure behavior.
+
 - Reject impossible calendar dates, invalid IPv4 octets and excluded US SSN
   number groups; restrict phone detection to supported NANP formats. Unknown
   cities no longer fall back to names. City reference updates invalidate the

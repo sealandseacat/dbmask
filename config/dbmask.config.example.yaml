@@ -112,13 +112,13 @@ masking:
   rule_strategies:
     email: fake_email          # lands on the undeliverable example.invalid domain
     # email: fake_email_keep_domain   # ...or keep the original domain (identifiable!)
-    full_name: fake_name
+    # full_name: fake_name  # omit to choose first/last-name defaults from column context
     first_name: fake_first_name
     last_name: fake_last_name
     city: fake_city
-    phone: format_random
-    ssn: format_random
-    credit_card: fake_credit_card    # random digits, still Luhn-valid
+    phone: fake_phone
+    ssn: fake_ssn
+    credit_card: fake_credit_card    # same recognized brand/length, Luhn-valid
     ip_address: fake_ip              # valid octets (no 999.999.999.999)
     uuid: fake_uuid                  # a real v4 UUID, not hex-with-a-'z'
     date: fake_date                  # deterministic ±30-730 day shift, always a real date

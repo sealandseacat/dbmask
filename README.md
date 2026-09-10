@@ -151,7 +151,8 @@ joins survive.
 | `fake_email_keep_domain` | same, but keeps the original domain (identifiable — opt-in) | ✓ |
 | `fake_uuid` | a real, deterministic **v4 UUID** | ✓ |
 | `fake_ip` | valid IPv4 octets / IPv6 hex, grouping kept | ✓ |
-| `fake_credit_card` | random digits, separators kept, **Luhn-valid** | ✓ |
+| `fake_phone` / `fake_ssn` | constrained phone/SSN formats, separators kept | ✓ |
+| `fake_credit_card` | same brand/length, separators kept, **Luhn-valid** | ✓ |
 | `fake_date` | ±30–730-day deterministic shift — always a real calendar date | ✓ |
 | `format_random` | same length & character classes (`Ab3-9z` → `Qf7-2k`) | typed values stay typed |
 | `shuffle` | characters permuted in place | typed values stay typed |

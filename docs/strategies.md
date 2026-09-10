@@ -18,7 +18,9 @@ computation change.)
 | `fake_email_keep_domain` | `jane@corp.com` → `karen.lopez316@corp.com` | keeps the (possibly identifying) domain — explicit opt-in |
 | `fake_uuid` | valid, deterministic **v4 UUID** | case and `{}` braces preserved; `uuid.UUID` in → `uuid.UUID` out |
 | `fake_ip` | `203.0.113.7` → `141.66.203.9` | valid octets (1–254); IPv6 keeps grouping/case |
-| `fake_credit_card` | digits random, separators kept | **Luhn-valid** so checksum-validating consumers keep working |
+| `fake_phone` | NANP NXX-NXX-XXXX | country prefix, separators and extension shape preserved |
+| `fake_ssn` | valid SSN structure | excludes invalid area/group/serial values; separators preserved |
+| `fake_credit_card` | same recognized brand and length | separators kept and **Luhn-valid**; original BIN is not retained |
 | `fake_date` | ±30–730-day deterministic shift | always a real calendar date, same representation in/out |
 | `format_random` | `Ab3-9z` → `Qf7-2k` | same length + character classes; typed values stay typed (below) |
 | `shuffle` | characters permuted in place | separators keep positions; typed values dispatch like `format_random` |
@@ -43,7 +45,7 @@ masked `INTEGER` column from receiving a string.
 
 ## Which strategy applies to a column?
 
-First match wins:
+An explicit reviewed `masking_strategy` wins first. Otherwise, first match wins:
 
 ```mermaid
 flowchart TD
@@ -59,7 +61,8 @@ flowchart TD
 Built-in rule defaults: `email→fake_email`, `full_name→fake_name`,
 `first_name`/`last_name`/`city` → their fakes, `uuid→fake_uuid`,
 `ip_address→fake_ip`, `credit_card→fake_credit_card`,
-`date`/`date_of_birth→fake_date`, `phone`/`ssn`/`zip_code→format_random`,
+`date`/`date_of_birth→fake_date`, `phone→fake_phone`, `ssn→fake_ssn`,
+`zip_code→format_random`,
 `address→redact`.
 
 ### Free text is your call
@@ -97,3 +100,38 @@ register_strategy("fixed_suffix", strat_fixed_suffix)
 Rules for a well-behaved strategy: deterministic (derive randomness from
 `seeded_rng(value, ctx.seed)`), `None` stays `None`, and output should be
 valid for the column's type. `dbmask strategies` lists everything registered.
+
+## Format contracts and migration
+
+The default for a `full_name` detection uses `fake_first_name` for columns such
+as `first_name`/`given_name`/`middle_name` and `fake_last_name` for
+`last_name`/`family_name`/`surname`. Explicit reviewed, column and rule mappings
+still take precedence. Remove a broad `full_name: fake_name` mapping if you
+want the column-aware default.
+
+`fake_phone`, `fake_ssn`, `fake_credit_card` and `fake_date` reject unsupported
+nonempty input with `MaskingValidationError`, without including the value in
+the error. A 90% sample match does not validate the remaining database rows.
+Choose an explicit `blank`, `null` or `redact` strategy for mixed/invalid values
+when appropriate to the column constraints. Missing values stay missing.
+Dictionary replacements avoid selecting the original; the engine also rejects
+unchanged replacements (including cached ones and case-only changes). For
+example, `shuffle` cannot mask `AAAA`, and a sensitive boolean needs an explicit
+strategy such as `null` if its column permits it.
+
+Format-valid generated phone/SSN/card values are not guaranteed unassigned.
+They are synthetic replacements, not encryption or payment tokens. This patch
+does not guarantee unique replacements or preservation of all business rules.
+
+Phone/SSN defaults now use new strategies, so old `format_random` mappings are
+not reused. Cards use a new `fake_credit_card:brand-v2` seed-map namespace;
+previous card entries stay stored but are bypassed. Explicit historical
+strategies remain authoritative: review old `format_random` choices if you
+want these stronger format contracts. Rebuild related test copies together
+when changing strategies; do not mix old and new mappings across joins.
+
+Always preview and apply to a disposable copy. Masking commits in batches;
+if a later row fails validation, earlier batches may already have changed.
+The error is not a database-wide rollback. Restart from an untouched copy
+after fixing the strategy or data. Review exports record the strategy actually
+selected by the engine, including configured overrides.

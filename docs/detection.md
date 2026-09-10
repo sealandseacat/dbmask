@@ -84,10 +84,10 @@ change once on upgrade. Do not mix old and new date mappings across related
 copies. Direct `MaskingEngine` callers can supply `date_order="DMY"`; Runner
 passes it from detection configuration.
 
-A 90% matching column can still contain malformed remaining values. The legacy
-`fake_date` fallback for unparseable text remains format randomization; neither
-the sample threshold nor this patch guarantees every row is a valid date.
-Review those mismatches before applying masking.
+A 90% matching column can still contain malformed remaining values. `fake_date`
+rejects unparseable nonempty text, as do the strict phone/SSN/card strategies.
+Neither the sample threshold nor the parser guarantees every database row is
+valid. Review mismatches before applying masking; see [strategies](strategies.md).
 
 ## Reports and review
 

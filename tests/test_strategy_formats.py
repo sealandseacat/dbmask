@@ -18,11 +18,13 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
+import pytest
+
 from dbmask.config import MaskingConfig, SeedMapConfig
 from dbmask.detection.patterns import _luhn_valid
 from dbmask.masking.engine import ColumnPlan, MaskingEngine
 from dbmask.masking.format import coerce_stored, luhn_check_digit
-from dbmask.masking.rules import MaskContext, get_strategy
+from dbmask.masking.rules import MaskContext, MaskingValidationError, get_strategy
 
 CTX = MaskContext(column="x", rule=None, seed="format-tests")
 
@@ -147,9 +149,9 @@ def test_fake_date_deterministic():
     assert _run("fake_date", "1990-04-15") == _run("fake_date", "1990-04-15")
 
 
-def test_fake_date_garbage_falls_back_to_shape():
-    out = _run("fake_date", "not a date")
-    assert isinstance(out, str) and len(out) == len("not a date")
+def test_fake_date_garbage_requires_review():
+    with pytest.raises(MaskingValidationError, match="valid calendar date"):
+        _run("fake_date", "not a date")
 
 
 # -- typed dispatch through format_random / shuffle ----------------------------

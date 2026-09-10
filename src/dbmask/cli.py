@@ -86,6 +86,8 @@ def scan(config_path: str, as_json: bool, output: str) -> None:
         records = []
         for decision in report.decisions:
             record = HistoryRecord.from_decision(decision)
+            if decision.is_sensitive:
+                record = replace(record, masking_strategy=runner.masker.resolve_strategy(decision))
             stored = with_history.get(record.key)
             if stored and decision.source in {"history", "history_pending"}:
                 records.append(stored)
@@ -182,7 +184,15 @@ def mask(config_path: str, apply: bool, allow_partial: bool, show_values: bool) 
                 err=True,
             )
             sys.exit(2)
-        results = runner.mask(report.decisions)
+        from dbmask.masking.rules import MaskingValidationError
+
+        try:
+            results = runner.mask(report.decisions)
+        except MaskingValidationError as exc:
+            raise click.ClickException(
+                f"Masking stopped: {exc}. Earlier committed batches may have changed; "
+                "review the error and restart from an untouched test copy."
+            ) from exc
 
     mode = "APPLIED" if apply else "DRY-RUN (no changes written)"
     click.echo(f"=== Masking {mode} ===")

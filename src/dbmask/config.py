@@ -165,7 +165,7 @@ class MaskingConfig:
     #   e.g. {"notes": "blank", "public.users.bio": "redact"}
     column_strategies: dict[str, str] = field(default_factory=dict)
     # Map a detected rule name -> masking strategy name.
-    # e.g. {"email": "fake_email", "full_name": "fake_name", "ssn": "format_random"}
+    # e.g. {"email": "fake_email", "full_name": "fake_name", "ssn": "fake_ssn"}
     rule_strategies: dict[str, str] = field(default_factory=dict)
     # Default strategy when a rule has no explicit mapping.
     default_strategy: str = "format_random"

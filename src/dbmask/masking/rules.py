@@ -14,7 +14,7 @@ Built-in options:
 """
 from __future__ import annotations
 
-import string
+import re
 import uuid as uuid_mod
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -22,6 +22,12 @@ from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
 
 from dbmask.dates import parse_date
+from dbmask.detection.patterns import (
+    CARD_BRANDS,
+    _looks_like_card,
+    _looks_like_phone,
+    _looks_like_ssn,
+)
 from dbmask.masking import dictionaries as dicts
 from dbmask.masking.format import (
     digits_only_random,
@@ -42,6 +48,56 @@ class MaskContext:
 
 
 Strategy = Callable[[str, MaskContext], object]
+
+
+class MaskingValidationError(ValueError):
+    """A strategy cannot safely fulfill its contract; never include raw PII."""
+
+
+def _put_digits(original, digits: str):
+    text = str(original)
+    iterator = iter(digits)
+    result = "".join(next(iterator) if c in "0123456789" else c for c in text)
+    return int(result) if isinstance(original, int) and not isinstance(original, bool) else result
+
+
+def strat_fake_phone(value, ctx: MaskContext):
+    """Preserve supported NANP formatting/country marker; randomize the extension."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return value
+    text = str(value).strip()
+    if not _looks_like_phone(text):
+        raise MaskingValidationError("fake_phone requires a supported NANP value; review mismatches")
+    extension = re.search(r"(?:ext\.?|x|#)\s*([0-9]+)$", text, re.IGNORECASE)
+    main = text[:extension.start()] if extension else text
+    main_digits = "".join(c for c in main if c in "0123456789")
+    country = "1" if len(main_digits) == 11 else ""
+    rng = seeded_rng(text, ctx.seed)
+    while True:
+        digits = country + "".join(
+            str(rng.randint(2, 9) if i in (0, 3) else rng.randint(0, 9)) for i in range(10)
+        )
+        if extension:
+            digits += "".join(str(rng.randrange(10)) for _ in extension[1])
+        if digits != "".join(c for c in text if c in "0123456789"):
+            return _put_digits(value, digits)
+
+
+def strat_fake_ssn(value, ctx: MaskContext):
+    """Preserve nine-digit/3-2-4 format and SSN exclusions; no assignment claim."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return value
+    text = str(value).strip()
+    if not _looks_like_ssn(text):
+        raise MaskingValidationError("fake_ssn requires a format-valid US SSN; review mismatches")
+    rng = seeded_rng(text, ctx.seed)
+    while True:
+        area = rng.randint(100 if isinstance(value, int) else 1, 899)
+        if area == 666:
+            continue
+        digits = f"{area:03d}{rng.randint(1, 99):02d}{rng.randint(1, 9999):04d}"
+        if digits != text.replace("-", ""):
+            return _put_digits(value, digits)
 
 # ---------------------------------------------------------------------------
 # Individual strategies
@@ -151,7 +207,14 @@ def _pick(dictionary: str, value: str, ctx: MaskContext) -> Optional[str]:
     if not pool:
         return None
     rng = seeded_rng(str(value), ctx.seed)
-    return rng.choice(pool)
+    # Preserve existing deterministic outputs whenever they already differ.
+    pick = rng.choice(pool)
+    if pick.casefold() != str(value).casefold():
+        return pick
+    alternatives = [p for p in pool if p.casefold() != str(value).casefold()]
+    if not alternatives:
+        raise MaskingValidationError("Dictionary contains no replacement different from the input")
+    return rng.choice(alternatives)
 
 
 def strat_fake_first_name(value, ctx: MaskContext):
@@ -174,7 +237,13 @@ def strat_fake_name(value, ctx: MaskContext):
         return None
     first = _pick("first_names", value, ctx) or "Alex"
     last = _pick("last_names", str(value) + "_last", ctx) or "Doe"
-    return f"{first} {last}"
+    result = f"{first} {last}"
+    if result.casefold() == str(value).casefold():
+        alternatives = [n for n in dicts.get_dictionary("last_names") if n.casefold() != last.casefold()]
+        if not alternatives:
+            raise MaskingValidationError("Name dictionary cannot produce a different replacement")
+        result = f"{first} {seeded_rng(str(value), ctx.seed).choice(alternatives)}"
+    return result
 
 
 def strat_fake_city(value, ctx: MaskContext):
@@ -269,27 +338,27 @@ def strat_fake_ip(value, ctx: MaskContext):
 
 
 def strat_fake_credit_card(value, ctx: MaskContext):
-    """Randomize card digits but keep the number **Luhn-valid**.
+    """Preserve supported brand, length and separators, with a valid Luhn digit.
 
-    Separators/spacing are preserved. Test suites and UIs that checksum card
-    fields keep working; ``format_random`` produced numbers that fail Luhn
-    (and can also be told apart from real data by that failure).
+    Use a canonical brand prefix, not the original issuer/account prefix.
+    This is synthetic test data, not a payment token or approved test PAN.
     """
-    if value is None:
-        return None
-    s = str(value)
-    rng = seeded_rng(s, ctx.seed)
-    digit_idx = [i for i, ch in enumerate(s) if ch.isdigit()]
-    if len(digit_idx) < 2:
-        return strat_format_random(value, ctx)
-    out = list(s)
-    for i in digit_idx:
-        out[i] = rng.choice(string.digits)
-    if out[digit_idx[0]] == "0":
-        out[digit_idx[0]] = rng.choice("123456789")
-    partial = "".join(out[i] for i in digit_idx[:-1])
-    out[digit_idx[-1]] = str(luhn_check_digit(partial))
-    return "".join(out)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return value
+    text = str(value).strip()
+    if not _looks_like_card(text):
+        raise MaskingValidationError("fake_credit_card requires a supported brand/length/Luhn value")
+    digits = text.replace(" ", "").replace("-", "")
+    for _, lengths, ranges in CARD_BRANDS:
+        if len(digits) in lengths and any(lo <= int(digits[:n]) <= hi for lo, hi, n in ranges):
+            prefix = str(ranges[0][0])
+            break
+    rng = seeded_rng(text, ctx.seed)
+    while True:
+        partial = prefix + "".join(str(rng.randrange(10)) for _ in range(len(digits) - len(prefix) - 1))
+        masked = partial + str(luhn_check_digit(partial))
+        if masked != digits:
+            return _put_digits(value, masked)
 
 
 def _date_shift(anchor: str, ctx: MaskContext) -> timedelta:
@@ -302,16 +371,17 @@ def strat_fake_date(value, ctx: MaskContext):
 
     The result is always a **real calendar date** in the same representation
     as the input (`date` stays `date`, ``2026-02-14`` stays ISO-formatted).
-    ``format_random`` on a date produced impossible values like
-    ``8342-73-51`` that typed columns reject outright. Unparseable strings
-    fall back to format-preserving randomization.
+    Unparseable text raises a value-free error for review. It must not silently
+    turn into digit soup just because 90% of the sampled column was date-like.
     """
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value + _date_shift(value.isoformat(), ctx)
-    if isinstance(value, date):
-        return value + _date_shift(value.isoformat(), ctx)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return value
+    if isinstance(value, (datetime, date)):
+        delta = _date_shift(value.isoformat(), ctx)
+        try:
+            return value + delta
+        except OverflowError:
+            return value - delta
     s = str(value)
     parsed = parse_date(s, ctx.date_order)
     if parsed is not None:
@@ -321,8 +391,7 @@ def strat_fake_date(value, ctx: MaskContext):
         except OverflowError:
             shifted = parsed.value - delta
         return parsed.render(shifted)
-    rng = seeded_rng(s, ctx.seed)
-    return format_preserving_random(s, rng)
+    raise MaskingValidationError("fake_date requires a supported valid calendar date; review mismatches")
 
 
 def make_dictionary_strategy(dictionary: str) -> Strategy:
@@ -356,6 +425,8 @@ STRATEGIES: dict[str, Strategy] = {
     "fake_ip": strat_fake_ip,
     "fake_credit_card": strat_fake_credit_card,
     "fake_date": strat_fake_date,
+    "fake_phone": strat_fake_phone,
+    "fake_ssn": strat_fake_ssn,
 }
 
 # Sensible defaults mapping *detected rule* -> *strategy* when the user hasn't
@@ -366,8 +437,8 @@ DEFAULT_RULE_STRATEGIES: dict[str, str] = {
     "first_name": "fake_first_name",
     "last_name": "fake_last_name",
     "city": "fake_city",
-    "phone": "format_random",
-    "ssn": "format_random",
+    "phone": "fake_phone",
+    "ssn": "fake_ssn",
     "credit_card": "fake_credit_card",
     "zip_code": "format_random",
     "ip_address": "fake_ip",

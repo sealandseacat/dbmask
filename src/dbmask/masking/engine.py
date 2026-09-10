@@ -9,6 +9,7 @@ Non-sensitive columns are passed through untouched.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Optional
@@ -21,6 +22,7 @@ from dbmask.masking.rules import (
     DEFAULT_RULE_STRATEGIES,
     STRATEGIES,
     MaskContext,
+    MaskingValidationError,
     get_strategy,
 )
 from dbmask.masking.seed_store import DEFAULT_SEED_MAP_URL, SeedStore
@@ -133,6 +135,13 @@ class MaskingEngine:
         # 2) user mapping for the detected rule
         if rule in self.config.rule_strategies:
             return self.config.rule_strategies[rule]
+        if rule == "full_name":
+            name = re.sub(r"([a-z])([A-Z])", r"\1_\2", decision.column).lower()
+            tokens = "_" + re.sub(r"[^a-z0-9]+", "_", name).strip("_") + "_"
+            if any("_" + part + "_" in tokens for part in ("first_name", "given_name", "middle_name")):
+                return "fake_first_name"
+            if any("_" + part + "_" in tokens for part in ("last_name", "family_name", "surname")):
+                return "fake_last_name"
         # 3) built-in default for the detected rule
         if rule in DEFAULT_RULE_STRATEGIES:
             return DEFAULT_RULE_STRATEGIES[rule]
@@ -175,13 +184,20 @@ class MaskingEngine:
             column=plan.column, rule=plan.rule, seed=self.config.seed, date_order=self.date_order,
         )
 
+        has_content = value is not None and (not isinstance(value, str) or bool(value.strip()))
+
+        def checked(result):
+            if has_content and result is not None and str(result).casefold() == str(value).casefold():
+                raise MaskingValidationError("Masking produced an unchanged value; choose another strategy")
+            return result
+
         store = self.seed_store()
         if (
             store is None
             or value is None
             or plan.strategy_name.lower() in self._untracked
         ):
-            return strategy(value, ctx)
+            return checked(strategy(value, ctx))
 
         # Pairs are scoped per strategy, so the same value masks identically in
         # every column that uses that strategy (preserving joins across tables).
@@ -190,6 +206,8 @@ class MaskingEngine:
             # Parser semantics changed; old format-random fallbacks must not be
             # reused, nor may an MDY interpretation leak into a DMY deployment.
             scope += ":calendar-v2:" + self.date_order
+        if scope == "fake_credit_card":
+            scope += ":brand-v2"
         original = str(value)
 
         recorded = store.lookup(scope, original)
@@ -197,9 +215,16 @@ class MaskingEngine:
             # The store keeps text; give the replacement back the original's
             # Python type (int/float/Decimal/date/datetime/UUID) so typed
             # columns on strict engines accept the write.
-            return coerce_stored(value, recorded)
+            result = coerce_stored(value, recorded)
+            if has_content and result is not None and str(result).casefold() == str(value).casefold():
+                raise MaskingValidationError("Stored replacement equals original; review the seed-map entry")
+            # A cached date must not bypass the new strict input contract.
+            if plan.strategy_name in {"fake_date", "fake_phone", "fake_ssn", "fake_credit_card"}:
+                strategy(value, ctx)
+            return result
 
         masked = strategy(value, ctx)
+        checked(masked)
         if masked is None or masked == "":
             return masked  # nothing meaningful to track
         # A dry run must not have side effects: pairs are only recorded when

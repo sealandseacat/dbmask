@@ -9,6 +9,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Opt-in `masking.null_placeholders` policies for exact schema/table/column
+  locations: only listed text markers become SQL NULL, before seed lookup;
+  valid values still use their chosen masking strategy. A synthetic issue #36
+  demo exports checked before/after CSVs without external services.
+
 - Optional `history.source_file` mode: load the original CSV/XLSX/MD each run,
   export a review plus source/analysis companion, then `history-writeback`
   previews and merges approved rows into that file. Exact keys, revision/hash
@@ -47,6 +52,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   Existing history rows are retained without altering the legacy table.
 
 ### Fixed
+
+- Support English month-name dates in the shared detector/masking parser,
+  independent of OS locale, preserving supported layouts and time suffixes.
+  Support space-separated and partially hidden SSNs; visible serials always
+  change. Partial SSN detection requires SSN context. New `fake_ssn:format-v2`
+  seed mappings bypass old replacements that could retain original last-four
+  digits. Unsupported values remain strict unless explicitly listed as markers.
 
 - Masking now uses constrained phone/SSN generators and brand/length/Luhn-valid
   card replacements, with column-aware first/last-name defaults. Strict date,

@@ -26,7 +26,6 @@ from dbmask.detection.patterns import (
     CARD_BRANDS,
     _looks_like_card,
     _looks_like_phone,
-    _looks_like_ssn,
 )
 from dbmask.masking import dictionaries as dicts
 from dbmask.masking.format import (
@@ -35,6 +34,7 @@ from dbmask.masking.format import (
     luhn_check_digit,
     seeded_rng,
 )
+from dbmask.ssn import parse_ssn
 
 
 @dataclass
@@ -84,19 +84,25 @@ def strat_fake_phone(value, ctx: MaskContext):
 
 
 def strat_fake_ssn(value, ctx: MaskContext):
-    """Preserve nine-digit/3-2-4 format and SSN exclusions; no assignment claim."""
+    """Preserve supported full/partial shapes; always replace the visible serial."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return value
     text = str(value).strip()
-    if not _looks_like_ssn(text):
+    parsed = parse_ssn(text)
+    if parsed is None:
         raise MaskingValidationError("fake_ssn requires a format-valid US SSN; review mismatches")
     rng = seeded_rng(text, ctx.seed)
+    if parsed.partial:
+        while True:
+            serial = f"{rng.randint(1, 9999):04d}"
+            if serial != parsed.digits:
+                return _put_digits(value, serial)
     while True:
         area = rng.randint(100 if isinstance(value, int) else 1, 899)
         if area == 666:
             continue
         digits = f"{area:03d}{rng.randint(1, 99):02d}{rng.randint(1, 9999):04d}"
-        if digits != text.replace("-", ""):
+        if digits[-4:] != parsed.digits[-4:]:
             return _put_digits(value, digits)
 
 # ---------------------------------------------------------------------------

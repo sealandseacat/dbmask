@@ -66,6 +66,10 @@ class MaskingEngine:
         self._column_strategies = {
             k.lower(): v for k, v in (config.column_strategies or {}).items()
         }
+        self._null_placeholders = {
+            (p.schema, p.table, p.column): frozenset(p.values)
+            for p in config.null_placeholders
+        }
         # Seed map: durable (original -> masked) pair tracking. Supplying a store
         # explicitly hands its lifecycle to the caller; otherwise the engine
         # creates and closes its own.
@@ -172,14 +176,22 @@ class MaskingEngine:
         """Mask one value, reusing its tracked pair when the seed map is on.
 
         Order of operations:
-          1. Look the value up in the seed map. A hit means this value was
+          1. Convert an explicitly configured marker in this exact column to
+             NULL without consulting or writing the seed map.
+          2. Look the value up in the seed map. A hit means this value was
              masked before, so the recorded replacement is reused — that is what
              keeps "Tesla always becomes Apple" true across runs, even if the
              dictionaries or the seed have changed since.
-          2. On a miss, compute the replacement with the strategy and record the
+          3. On a miss, compute the replacement with the strategy and record the
              new pair, which assigns it a seed token for future tracking.
         """
         strategy = get_strategy(plan.strategy_name)
+        # Apply only to explicitly reviewed text markers in this exact column.
+        # Do this before seed lookup so another column's cached value cannot
+        # defeat the policy; NULL marker results are never stored as mappings.
+        markers = self._null_placeholders.get((plan.schema, plan.table, plan.column), ())
+        if isinstance(value, str) and value.strip() in markers:
+            return None
         ctx = MaskContext(
             column=plan.column, rule=plan.rule, seed=self.config.seed, date_order=self.date_order,
         )
@@ -208,6 +220,9 @@ class MaskingEngine:
             scope += ":calendar-v2:" + self.date_order
         if scope == "fake_credit_card":
             scope += ":brand-v2"
+        if scope == "fake_ssn":
+            # Earlier replacements could retain the original identifying serial.
+            scope += ":format-v2"
         original = str(value)
 
         recorded = store.lookup(scope, original)

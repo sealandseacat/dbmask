@@ -26,6 +26,8 @@ config/dbmask.fields.yaml
 *.db
 dbmask_history.db
 dbmask_seedmap.db
+# Fresh output folders from examples/issue36_demo.py
+/issue36-demo-*/
 
 # Editors / OS
 .vscode/

@@ -94,7 +94,7 @@ def test_weights_and_catalogue_order_cannot_choose_a_winner():
         ("123-12-0000", "ssn", None),
         ("12345-6789", "ssn", None),
         ("123-456789", "ssn", None),
-        ("***-**-1234", "ssn", None),
+        ("***-**-1234", "ssn", "ssn"),
         ("02108", "zip", "zip_code"),
         ("02108-1234", "postalCode", "zip_code"),
         ("021081234", "zip", None),

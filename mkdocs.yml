@@ -53,6 +53,7 @@ nav:
       - Historical decisions: history.md
       - Pattern detection: detection.md
       - Masking strategies: strategies.md
+      - Mixed-format demo: issue36-demo.md
       - The seed map: seed-map.md
       - Validation: validation.md
       - LLM detection: llm.md

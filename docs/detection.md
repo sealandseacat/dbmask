@@ -42,7 +42,7 @@ stricter threshold than the matcher's configured floor. Ties remain inconclusive
 | Type | Value check | Context / limits |
 |---|---|---|
 | `phone` | NANP NXX-NXX-XXXX, N=2-9; optional `1`/`+1`, supported spaces/dots/hyphens/parentheses, `ext`, `ext.`, `x` or `#` plus 1-6 extension digits | Bare digits require phone context. Seven-digit local numbers, other country codes and malformed grouping remain inconclusive. NANP includes US/Canada and other participating regions; this does not verify geographic assignment. |
-| `ssn` | Nine digits or 3-2-4 hyphen groups; excludes 000/666/900-999 area, 00 group, 0000 serial | Bare digits require SSN context; partial, masked and invalid SSNs need review. US SSN only, not Canadian SIN. |
+| `ssn` | Nine digits or consistent 3-2-4 hyphen/space groups; excludes 000/666/900-999 area, 00 group, 0000 serial. Partial forms accept five repeated X, x or * markers plus four visible digits. | Bare digits and partial forms require SSN context. Hidden groups cannot be validated; fully hidden or malformed forms need review. US SSN only, not Canadian SIN. |
 | `date` | Real calendar parsing, leap years and valid time ranges | DATE/DATETIME/TIMESTAMP metadata supplies context. Compact YYYYMMDD needs date context; no two-digit-year or epoch guessing. |
 | `email` | Common address syntax including `+tag`, multi-label domains and common TLDs | No delivery/network check. Quoted local parts, internationalized special syntax and embedded text are outside this conservative recognizer. |
 | `credit_card` | Brand prefix + supported length + Luhn | Requires card context. Visa 13/16/19; Mastercard 16, prefixes 51-55 or 2221-2720; Amex 15, 34/37; Discover subset 16/19, 6011/644-649/65. Other brands/ranges require review. |
@@ -71,6 +71,17 @@ Dot-separated D.M.YYYY is explicitly day-first. Single-digit months/days are
 supported. An optional space or `T` time suffix accepts H:MM, optional seconds,
 1-6 fractional second digits and `Z` or an offset such as `+05:30`.
 
+English month names also support `23-Dec-1974`, `23-December-1974`,
+`23 December 1974`, `May 27, 1960` and `May 27 1960`, with the same optional
+time suffix. Abbreviations use three letters; full names, uppercase, lowercase
+and title case are supported independently of the operating-system locale.
+Mixed-case tokens such as `jAn`, localized names and two-digit years are not
+guessed. Month-name layouts are unambiguous under either MDY or DMY. Rendering
+preserves their delimiters, numeric widths, month case/style and time suffix.
+For the ambiguous token `May`, hyphenated D-May-YYYY renders abbreviations;
+prose layouts render full month names. Names can change length after a shift,
+so text columns must have enough room for the longest rendered month name.
+
 `03/04/2026` means March 4 under the US default MDY and April 3 under DMY. Choose
 the order that your dataset uses; mixed MDY/DMY columns need manual handling.
 Detection and `fake_date` share this parser and preserve separators, date-field
@@ -88,6 +99,8 @@ A 90% matching column can still contain malformed remaining values. `fake_date`
 rejects unparseable nonempty text, as do the strict phone/SSN/card strategies.
 Neither the sample threshold nor the parser guarantees every database row is
 valid. Review mismatches before applying masking; see [strategies](strategies.md).
+Configured placeholder markers remain nonblank mismatches in these ratios;
+the masking-only policy does not silently change the denominator.
 
 ## Reports and review
 

@@ -17,8 +17,8 @@ authors:
   - family-names: "Feng"
     given-names: "Siyuan"
     email: "sealseacat@gmail.com"
-version: "0.1.1"
-date-released: "2026-08-21"
+version: "0.1.2"
+date-released: "2026-09-19"
 license: MIT
 repository-code: "https://github.com/sealandseacat/dbmask"
 url: "https://github.com/sealandseacat/dbmask"

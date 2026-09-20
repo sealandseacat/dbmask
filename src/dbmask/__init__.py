@@ -11,4 +11,4 @@ A general-purpose, open-source toolkit that:
 from dbmask.detection.result import Decision, Sensitivity
 
 __all__ = ["Decision", "Sensitivity", "__version__"]
-__version__ = "0.1.1"
+__version__ = "0.1.2"

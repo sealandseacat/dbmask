@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dbmask"
-version = "0.1.1"
+version = "0.1.2"
 description = "An open-source toolkit to discover and mask sensitive data in any database."
 readme = "README.md"
 license = "MIT"

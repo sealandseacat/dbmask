@@ -1,0 +1,33 @@
+database:
+  url: ${DBMASK_TARGET_URL}
+  name: dbmask_target
+  schemas: [public]
+
+source_database:
+  url: ${DBMASK_SOURCE_URL}
+  name: dbmask_source
+  schemas: [public]
+
+detection:
+  sample_size: 10
+  pattern_min_samples: 1
+  pattern_min_ratio: 1.0
+  use_history: false
+  overrides_file: .github/ota/dbmask-postgres.fields.yaml
+
+history:
+  enabled: false
+
+llm:
+  enabled: false
+
+masking:
+  seed: dbmask-postgres-pressure
+  seed_map:
+    enabled: false
+
+validation:
+  enabled: true
+  columns:
+    - public.customers.full_name
+    - public.customers.email

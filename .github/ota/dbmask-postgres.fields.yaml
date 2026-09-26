@@ -1,0 +1,5 @@
+# The fixture's identifier and status are intentionally non-sensitive. Keeping that review
+# decision explicit lets the test fail closed if PostgreSQL classification becomes incomplete.
+not_sensitive:
+  - public.customers.id
+  - public.customers.account_status

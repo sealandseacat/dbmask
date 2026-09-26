@@ -19,7 +19,7 @@ computation change.)
 | `fake_uuid` | valid, deterministic **v4 UUID** | case and `{}` braces preserved; `uuid.UUID` in → `uuid.UUID` out |
 | `fake_ip` | `203.0.113.7` → `141.66.203.9` | valid octets (1–254); IPv6 keeps grouping/case |
 | `fake_phone` | NANP NXX-NXX-XXXX | country prefix, separators and extension shape preserved |
-| `fake_ssn` | valid SSN structure | excludes invalid area/group/serial values; separators preserved |
+| `fake_ssn` | full or partially hidden SSN shape | consistent space/hyphen/compact forms; visible last four always change; hidden markers stay hidden |
 | `fake_credit_card` | same recognized brand and length | separators kept and **Luhn-valid**; original BIN is not retained |
 | `fake_date` | ±30–730-day deterministic shift | always a real calendar date, same representation in/out |
 | `format_random` | `Ab3-9z` → `Qf7-2k` | same length + character classes; typed values stay typed (below) |
@@ -112,8 +112,13 @@ want the column-aware default.
 `fake_phone`, `fake_ssn`, `fake_credit_card` and `fake_date` reject unsupported
 nonempty input with `MaskingValidationError`, without including the value in
 the error. A 90% sample match does not validate the remaining database rows.
-Choose an explicit `blank`, `null` or `redact` strategy for mixed/invalid values
-when appropriate to the column constraints. Missing values stay missing.
+Use an exact-column `masking.null_placeholders` policy for reviewed missing-value
+markers such as `"NULL"` or `"-"`; only those cells become SQL NULL and valid
+values still receive the chosen strategy. Unsupported non-marker values still
+raise. The column must allow NULL. This policy avoids selecting a whole-column
+`null` strategy merely because a few cells contain placeholders. Other invalid
+values require data correction or an explicitly reviewed alternative strategy.
+Missing values stay missing in the strict strategies.
 Dictionary replacements avoid selecting the original; the engine also rejects
 unchanged replacements (including cached ones and case-only changes). For
 example, `shuffle` cannot mask `AAAA`, and a sensitive boolean needs an explicit
@@ -129,6 +134,22 @@ previous card entries stay stored but are bypassed. Explicit historical
 strategies remain authoritative: review old `format_random` choices if you
 want these stronger format contracts. Rebuild related test copies together
 when changing strategies; do not mix old and new mappings across joins.
+
+Issue #36 extends `fake_ssn` to consistent space-separated forms and partial
+values such as `XXX-XX-5109`, `xxx xx 5109`, `***-**-5109` and `XXXXX5109`.
+Hidden markers remain hidden; the visible serial changes to another nonzero
+four-digit value. Full SSNs also always change the serial. Hidden groups are
+not reconstructed or claimed valid. Invalid full groups, inconsistent separators,
+zero serials and unsupported partial shapes still raise.
+
+SSN pairs now use `fake_ssn:format-v2`, bypassing earlier cached outputs that
+could retain the same last four digits. Older rows remain in the seed store.
+Rebuild related masked copies together after upgrading. Newly supported English
+month dates use the shared parser; existing numeric-date mappings keep their
+`calendar-v2` scope. See [supported date layouts](detection.md#dates-and-masking).
+
+A runnable [mixed-format example](issue36-demo.md) creates before/after CSVs
+without replacing valid date, phone, SSN, IP or card values with NULL.
 
 Always preview and apply to a disposable copy. Masking commits in batches;
 if a later row fails validation, earlier batches may already have changed.

@@ -7,7 +7,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-19
+
+Context-aware detection, stricter format-preserving masking, and reviewed
+history-file writeback. This release includes the merged fixes through #38.
+
 ### Added
+
+- Opt-in `masking.null_placeholders` policies for exact schema/table/column
+  locations: only listed text markers become SQL NULL, before seed lookup;
+  valid values still use their chosen masking strategy. A synthetic issue #36
+  demo exports checked before/after CSVs without external services.
 
 - Optional `history.source_file` mode: load the original CSV/XLSX/MD each run,
   export a review plus source/analysis companion, then `history-writeback`
@@ -48,6 +58,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Support English month-name dates in the shared detector/masking parser,
+  independent of OS locale, preserving supported layouts and time suffixes.
+  Support space-separated and partially hidden SSNs; visible serials always
+  change. Partial SSN detection requires SSN context. New `fake_ssn:format-v2`
+  seed mappings bypass old replacements that could retain original last-four
+  digits. Unsupported values remain strict unless explicitly listed as markers.
+
 - Masking now uses constrained phone/SSN generators and brand/length/Luhn-valid
   card replacements, with column-aware first/last-name defaults. Strict date,
   phone, SSN and card strategies reject invalid nonempty input; the engine
@@ -68,6 +85,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   unmasked as `UNKNOWN`. `phone` now rejects dates and bounds its digit count,
   and new dictionary-backed `city` and `address` patterns take those columns.
   [#24]
+
+### Upgrade notes
+
+- Review detection suggestions: ratios use distinct nonblank samples, not a
+  full-column census. Existing pending or legacy history is not an approval.
+- Back up existing history and seed maps before upgrading. Explicit approved
+  strategies still win: an old `null` choice continues clearing the entire
+  column until reviewed. Date/phone/SSN/card strategies reject unsupported
+  nonempty values; opt into exact-column marker policies only where appropriate.
+- New phone, SSN, card and date mapping scopes can change replacements compared
+  with older versions. Plan dependent snapshots together; see
+  `docs/strategies.md` for migration details. Do not resume a failed apply on an
+  already partly masked copy: earlier committed batches may have changed.
+- File writeback requires the newly exported review and its `.dbmask.json`
+  companion. Keep the original history file backed up and close Excel before
+  applying a reviewed change.
+- The separate Ota/PostgreSQL contribution in draft PR #37 is not included.
 
 ## [0.1.1] - 2026-08-24
 
@@ -208,7 +242,8 @@ First public release.
   validation with `twine check --strict` on every push and pull request.
 - `CONTRIBUTING.md`, `SECURITY.md`, and this changelog.
 
-[Unreleased]: https://github.com/sealandseacat/dbmask/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/sealandseacat/dbmask/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/sealandseacat/dbmask/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/sealandseacat/dbmask/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sealandseacat/dbmask/releases/tag/v0.1.0
 [#6]: https://github.com/sealandseacat/dbmask/issues/6

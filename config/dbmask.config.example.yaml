@@ -85,6 +85,15 @@ masking:
   seed: dbmask             # deterministic seed -> consistent, repeatable masking
   default_strategy: format_random   # used when a rule has no explicit mapping
 
+  # Opt-in: only listed text markers in these exact target columns become NULL.
+  # Case-sensitive after trimming outer whitespace; quote every marker.
+  # The target column must allow NULL. No global marker list or wildcard matching.
+  null_placeholders: []
+    # - schema: public
+    #   table: customers
+    #   column: date_of_birth
+    #   values: ["NULL", "null", "N/A", "n/a", "-", "???", "unknown", "TBD"]
+
   # (0) SEED MAP — durable tracking of every (original -> masked) pair.
   # `seed` above only makes masking *recomputable*. On its own, the mapping
   # silently changes if a dictionary file is reordered/extended or the seed is

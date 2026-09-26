@@ -158,6 +158,26 @@ class SeedMapConfig:
 
 
 @dataclass
+class NullPlaceholderConfig:
+    """Explicit text markers to convert to NULL in one exact target column."""
+
+    schema: str
+    table: str
+    column: str
+    values: list[str]
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(v, str) or not v.strip() for v in (self.schema, self.table, self.column)):
+            raise ValueError("null_placeholders requires literal nonempty schema/table/column names")
+        if (
+            not isinstance(self.values, list) or not self.values
+            or any(not isinstance(v, str) or not v.strip() for v in self.values)
+        ):
+            raise ValueError("null_placeholders.values must be a nonempty list of quoted nonblank strings")
+        self.values = [v.strip() for v in self.values]
+
+
+@dataclass
 class MaskingConfig:
     """ETL / masking behaviour."""
 
@@ -179,11 +199,28 @@ class MaskingConfig:
     seed_map: SeedMapConfig = field(default_factory=SeedMapConfig)
     # If True, write masked values back; if False, only produce a report/preview.
     dry_run: bool = True
+    # Literal, case-sensitive column locations in this config's target database.
+    # Only listed text markers become NULL; all other values use their strategy.
+    null_placeholders: list[NullPlaceholderConfig] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Allow the nested block to arrive as a plain dict straight from YAML.
         if isinstance(self.seed_map, dict):
             self.seed_map = SeedMapConfig(**self.seed_map)
+        if not isinstance(self.null_placeholders, list):
+            raise ValueError("null_placeholders must be a list of column policies")
+        policies = []
+        keys = set()
+        for entry in self.null_placeholders:
+            policy = NullPlaceholderConfig(**entry) if isinstance(entry, dict) else entry
+            if not isinstance(policy, NullPlaceholderConfig):
+                raise ValueError("null_placeholders requires column policies")
+            key = (policy.schema, policy.table, policy.column)
+            if key in keys:
+                raise ValueError("Duplicate null_placeholders column policy")
+            keys.add(key)
+            policies.append(policy)
+        self.null_placeholders = policies
 
 
 @dataclass

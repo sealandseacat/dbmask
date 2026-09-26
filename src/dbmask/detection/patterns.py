@@ -9,6 +9,7 @@ from ipaddress import IPv4Address
 from typing import Callable, Optional
 
 from dbmask.dates import parse_date
+from dbmask.ssn import parse_ssn
 
 
 @dataclass
@@ -72,13 +73,7 @@ def _looks_like_phone(value: str) -> bool:
 
 
 def _looks_like_ssn(value: str) -> bool:
-    if not re.fullmatch(r"(?:[0-9]{9}|[0-9]{3}-[0-9]{2}-[0-9]{4})", value):
-        return False
-    digits = value.replace("-", "")
-    return (
-        1 <= int(digits[:3]) <= 899 and digits[:3] != "666"
-        and digits[3:5] != "00" and digits[5:] != "0000"
-    )
+    return parse_ssn(value) is not None
 
 
 def _looks_like_email(value: str) -> bool:
@@ -283,6 +278,8 @@ class PatternMatcher:
                 blockers.append("Column/type context conflicts with " + ", ".join(sorted(hints)))
             requires_context = pat.name in {"full_name", "city", "zip_code", "credit_card"}
             if pat.name in {"phone", "ssn", "date"} and any(v.isascii() and v.isdigit() for v in matching):
+                requires_context = True
+            if pat.name == "ssn" and any(re.search(r"[Xx*]", v) for v in matching):
                 requires_context = True
             if requires_context and pat.name not in hints:
                 blockers.append("Requires supporting column/type context")

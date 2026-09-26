@@ -124,6 +124,11 @@ masking:
   dry_run: true                     # library default; the CLI enforces --apply anyway
   seed: ${DBMASK_SEED}              # PRIVATE seed -> deterministic masking
   default_strategy: format_random
+  null_placeholders:                # opt-in, exact column; marker cells only -> NULL
+    - schema: public
+      table: customers
+      column: date_of_birth
+      values: ["NULL", "null", "N/A", "n/a", "-"]  # quote all text markers
   column_strategies:                # after an explicit reviewed history strategy
     notes: blank
     public.users.bio: redact
@@ -140,6 +145,21 @@ masking:
 Strategy resolution order and the full catalogue:
 [Masking strategies](strategies.md). Durable consistency:
 [The seed map](seed-map.md).
+
+`null_placeholders` belongs to this config's target database and applies only
+to columns selected for masking. Schema/table/column names match literally and
+case-sensitively; there are no wildcards or column-name-only shortcuts. Values
+match case-sensitively after trimming outer whitespace. Only listed **string**
+values become SQL NULL, before strategy execution or seed-map lookup. Real
+NULLs and blank values retain their existing strategy behavior; other values
+still use the resolved strategy. Duplicate column policies, empty marker lists
+and non-string markers are configuration errors. A YAML `null` without quotes
+is not a string and will be rejected. Target columns must permit NULL.
+
+The policy does not change detection sample counts/ratios or get written into
+historical decisions; retain the YAML alongside your reviewed history. A cached
+replacement from another column cannot override it, and marker-to-NULL results
+are not recorded in the seed map. See the [mixed-format demo](issue36-demo.md).
 
 ## `validation`
 

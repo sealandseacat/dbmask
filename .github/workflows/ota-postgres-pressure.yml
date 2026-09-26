@@ -18,13 +18,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Compare bounded contract truth with repository CI
-        uses: ota-run/action@6bb5bf686df5a8385202c8c20b6f91c045e3c161 # v1.0.15
+        id: drift
+        continue-on-error: true
+        uses: ota-run/action@8001070c0c9e54ca2b729282df40d1a9f40c8a79 # v1.0.16
         with:
           command: doctor
           source: contract
           fail-on-error: false
-          fail-on-ci-drift: false
+          fail-on-ci-drift: true
           comment-pr: false
+      - name: Preserve the drift-check outcome
+        if: always()
+        shell: bash
+        run: test "${{ steps.drift.outcome }}" = success
 
   native:
     name: Ota contract (${{ matrix.os }})

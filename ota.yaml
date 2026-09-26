@@ -200,8 +200,8 @@ tasks:
       command succeeds. This proves one real masking-completeness negative control only.
     category: verify
     script: |
-      report="$(mktemp)"
-      trap 'rm -f "$report"' EXIT
+      report="ota-pressure/postgresql/strict-negative-control.json"
+      mkdir -p "$(dirname "$report")"
       set +e
       python -m dbmask.cli validate --config .github/ota/dbmask-postgres.yaml --strict --json >"$report"
       exit_code=$?
@@ -227,6 +227,7 @@ tasks:
       if non_pass[0].get("detail", {}).get("unmasked_rows") != 1:
           raise SystemExit("strict validation did not report exactly one restored sensitive value")
       PY
+      echo "strict negative control confirmed: masking_completeness refused public.customers.full_name with one unmasked row"
     requirements:
       toolchains: [python]
       env: [DBMASK_SOURCE_URL, DBMASK_TARGET_URL]
@@ -282,10 +283,10 @@ agent:
     - pyproject.toml
   bootstrap:
     ota:
-      note: Install the exact reviewed unreleased Ota revision only for this advisory pressure lane.
+      note: Install the reviewed Ota v1.6.28 release for this advisory pressure lane.
       source:
-        kind: git_rev
-        rev: 012739b598fd2e7821cd1129f4144693080a7afb
+        kind: version
+        version: v1.6.28
   notes: |
     Use `ota tasks --safe --use` before selecting agent work. The PostgreSQL pressure workflow is
     CI/operator-only because it recreates disposable external databases; it is non-blocking and

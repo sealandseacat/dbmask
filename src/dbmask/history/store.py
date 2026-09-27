@@ -211,6 +211,7 @@ class HistoryStore:
                 )
                 record = HistoryRecord.from_decision(decision)
                 current[record.key] = record
+            payload: str
             for payload in conn.execute(select(suggestions_table.c.payload).order_by(suggestions_table.c.id)).scalars():
                 record = HistoryRecord(**json.loads(payload))
                 current[record.key] = record

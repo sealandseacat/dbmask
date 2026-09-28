@@ -1,0 +1,125 @@
+name: "Trial report: I tested dbmask"
+description: "Share what you tested, what worked, what did not, and what you would change."
+title: "[Trial report] "
+labels:
+  - trial-report
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing dbmask.
+
+        Honest feedback is more useful than positive feedback. Partial success,
+        bugs, confusing behavior, and reasons you would not use dbmask are all
+        welcome.
+
+        Please do not include production data, credentials, confidential
+        information, or other sensitive material in this public issue.
+
+  - type: input
+    id: role
+    attributes:
+      label: Role / technical background
+      description: "For example: data engineer, DBA, QA engineer, privacy engineer, developer."
+      placeholder: "Data engineer"
+    validations:
+      required: true
+
+  - type: input
+    id: experience
+    attributes:
+      label: Relevant experience
+      description: "Approximately how many years have you worked in this or a related area?"
+      placeholder: "5 years"
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Test environment
+      description: "Please include whatever you know about your test environment."
+      placeholder: |
+        dbmask version:
+        Database and version:
+        Operating system:
+        Python version:
+        Installation method:
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: workflow
+    attributes:
+      label: What did you test?
+      options:
+        - label: "Installation"
+        - label: "`scan`"
+        - label: "`mask` preview / dry run"
+        - label: "`mask --apply`"
+        - label: "`validate` / `validate --strict`"
+        - label: "Configuration or overrides"
+        - label: "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: test_data
+    attributes:
+      label: Test data
+      description: "Briefly describe the data you used. Do not paste real sensitive data."
+      placeholder: "Synthetic customer table with names, email addresses, IDs, and dates."
+    validations:
+      required: true
+
+  - type: textarea
+    id: results
+    attributes:
+      label: What happened?
+      description: "What worked as expected? What outputs or behavior did you observe?"
+      placeholder: "scan identified..., mask changed..., validate..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: problems
+    attributes:
+      label: Problems, errors, or confusing behavior
+      description: "Please include failures or confusing steps. If none, write 'None'."
+      placeholder: "The setup was clear, but..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: real_world
+    attributes:
+      label: Would you consider using dbmask in a real workflow?
+      description: "Yes, no, or unsure are all useful answers. Please explain why."
+      placeholder: "Yes / No / Unsure, because..."
+    validations:
+      required: true
+
+  - type: input
+    id: identity
+    attributes:
+      label: Public identity (optional)
+      description: "If you are comfortable, provide your name, title, organization, or professional profile."
+      placeholder: "Optional"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: adopter
+    attributes:
+      label: Follow-up (optional)
+      options:
+        - label: "I am open to being contacted about listing this test or use case in ADOPTERS.md."
+
+  - type: checkboxes
+    id: public_confirmation
+    attributes:
+      label: Public issue confirmation
+      options:
+        - label: "I understand this issue is public and I have not included confidential, proprietary, credential, or sensitive data."
+          required: true

@@ -20,6 +20,13 @@ test systems, demo environments, analytics warehouses, vendor handoffs, AI
 pipelines. `dbmask` is for the moment you copy that data: it finds the
 sensitive columns, rewrites them with consistent fakes, and then **checks its
 own work** row by row.
+---
+
+## Try it without installing anything
+
+Run the complete scan → mask → validate workflow in your browser
+using the 30 seconds Google Colab demo.
+https://colab.research.google.com/drive/17oToBvmwJ9ni3b3afBn_gp8aqFdhHTw3?hl=en-GB#scrollTo=qVBhDcX56gHP
 
 ---
 

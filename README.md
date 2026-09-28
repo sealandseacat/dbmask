@@ -20,6 +20,17 @@ test systems, demo environments, analytics warehouses, vendor handoffs, AI
 pipelines. `dbmask` is for the moment you copy that data: it finds the
 sensitive columns, rewrites them with consistent fakes, and then **checks its
 own work** row by row.
+---
+
+## Try it in your browser
+
+Run the scan → preview → mask → validate workflow on a small
+synthetic SQLite dataset. No local installation or external LLM is required.
+
+[Open the demo in Google Colab](https://colab.research.google.com/drive/17oToBvmwJ9ni3b3afBn_gp8aqFdhHTw3)
+
+Tried it? [Share a trial report](https://github.com/sealandseacat/dbmask/issues/new?template=trial-report.yml).
+Successful runs, errors, and confusing steps are all useful feedback.
 
 ---
 
@@ -49,6 +60,7 @@ source_database:
   url: sqlite:///demo_original.db   # untouched copy, used by `validate`
 detection:
   skip_column_patterns: ["^id$"]    # surrogate keys aren't sensitive
+  pattern_min_samples: 1           # for this tiny synthetic demo only
 masking:
   seed: pick-a-private-seed
 EOF

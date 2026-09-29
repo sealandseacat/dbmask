@@ -29,6 +29,12 @@ dbmask_seedmap.db
 # Fresh output folders from examples/issue36_demo.py
 /issue36-demo-*/
 
+# Ota local runtime artifacts
+.ota/state/*
+.ota/contracts/*
+.ota/receipts/*
+.ota/proof/*
+
 # Editors / OS
 .vscode/
 .idea/

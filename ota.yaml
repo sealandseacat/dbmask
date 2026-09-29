@@ -1,0 +1,294 @@
+version: 1
+
+metadata:
+  ota:
+    minimum_version: "1.6.28"
+
+project:
+  name: dbmask
+  description: Bounded SQLite contributor verification and disposable PostgreSQL backend pressure
+  type: application
+
+toolchains:
+  python:
+    version: "3.12"
+
+env:
+  vars:
+    DBMASK_SOURCE_URL:
+      secret: true
+    DBMASK_TARGET_URL:
+      secret: true
+
+tasks:
+  setup:
+    description: Install dbmask's development and PostgreSQL test dependencies
+    notes: |
+      Installs the dependencies used by both the existing SQLite contributor suite and the
+      disposable PostgreSQL pressure workflow. It does not provision or contact a database.
+    category: setup
+    command:
+      exe: python
+      args: ["-m", pip, install, "-e", ".[dev,postgres]"]
+    requirements:
+      toolchains: [python]
+    effects:
+      network: true
+      network_kind: dependency_hydration
+    safe_for_agent: true
+
+  test:
+    description: Run dbmask's repository-owned SQLite contributor suite
+    notes: |
+      This is the ordinary contributor verification path. It exercises the repository-owned
+      SQLite suite only; it does not prove PostgreSQL, MySQL, release behavior, or production safety.
+    category: test
+    command:
+      exe: python
+      args: ["-m", pytest, "-q"]
+    requirements:
+      toolchains: [python]
+    depends_on: [setup]
+    safe_for_agent: true
+
+  postgres:seed:
+    description: Create isolated synthetic source and target PostgreSQL databases
+    notes: |
+      CI/operator-only. Recreates only the exact local disposable source and target database
+      identities declared for this pressure lane, then loads synthetic fixture data.
+    category: setup
+    command:
+      exe: python
+      args: [".github/ota/postgres_fixture.py"]
+    requirements:
+      toolchains: [python]
+      env: [DBMASK_SOURCE_URL, DBMASK_TARGET_URL]
+    effects:
+      network: true
+      network_kind: integration_test
+      external_state: [postgres]
+    depends_on: [setup]
+
+  postgres:scan:
+    description: Scan only the disposable synthetic PostgreSQL target
+    notes: |
+      Reads the seeded synthetic target through dbmask's PostgreSQL path. This is not a scan of
+      a production database and deliberately excludes the unrelated date-classification issue.
+    category: verify
+    command:
+      exe: python
+      args: ["-m", dbmask.cli, scan, "--config", ".github/ota/dbmask-postgres.yaml"]
+    requirements:
+      toolchains: [python]
+      env: [DBMASK_SOURCE_URL, DBMASK_TARGET_URL]
+    effects:
+      network: true
+      network_kind: integration_test
+    depends_on: [postgres:seed]
+
+  postgres:dry-run:
+    description: Preview masking against the disposable PostgreSQL target without writes
+    notes: |
+      Produces dbmask's masking preview for the synthetic target. No PostgreSQL mutation is
+      declared at this step; mutation is isolated to the following apply task.
+    category: verify
+    command:
+      exe: python
+      args: ["-m", dbmask.cli, mask, "--config", ".github/ota/dbmask-postgres.yaml"]
+    requirements:
+      toolchains: [python]
+      env: [DBMASK_SOURCE_URL, DBMASK_TARGET_URL]
+    effects:
+      network: true
+      network_kind: integration_test
+    depends_on: [postgres:scan]
+
+  postgres:apply:
+    description: Apply masking only to the disposable synthetic PostgreSQL target
+    notes: |
+      CI/operator-only. Mutates only the exact disposable target created by postgres:seed; it
+      must never be used against a production or operator-supplied database.
+    category: test
+    command:
+      exe: python
+      args: ["-m", dbmask.cli, mask, "--config", ".github/ota/dbmask-postgres.yaml", "--apply"]
+    requirements:
+      toolchains: [python]
+      env: [DBMASK_SOURCE_URL, DBMASK_TARGET_URL]
+    effects:
+      network: true
+      network_kind: integration_test
+      external_state: [postgres]
+    depends_on: [postgres:assert-dry-run]
+
+  postgres:assert-dry-run:
+    description: Assert that the PostgreSQL masking dry run leaves both synthetic databases unchanged
+    notes: |
+      Queries the seeded source and target directly after the dry run and requires their observed
+      rows to equal the retained synthetic fixture. This proves the observed postcondition, not
+      the absence of transient database activity or every possible PostgreSQL side effect.
+    category: verify
+    command:
+      exe: python
+      args: [".github/ota/postgres_fixture.py", "assert-dry-run"]
+    requirements:
+      toolchains: [python]
+      env: [DBMASK_SOURCE_URL, DBMASK_TARGET_URL]
+    effects:
+      network: true
+      network_kind: integration_test
+    depends_on: [postgres:dry-run]
+
+  postgres:assert-apply:
+    description: Assert source preservation and targeted synthetic masking after apply
+    notes: |
+      Queries both synthetic databases directly after apply. It requires the source, target
+      primary keys, and target non-sensitive account status to remain unchanged, while each
+      expected sensitive target value differs from its source value.
+    category: verify
+    command:
+      exe: python
+      args: [".github/ota/postgres_fixture.py", "assert-apply"]
+    requirements:
+      toolchains: [python]
+      env: [DBMASK_SOURCE_URL, DBMASK_TARGET_URL]
+    effects:
+      network: true
+      network_kind: integration_test
+    depends_on: [postgres:apply]
+
+  postgres:validate:
+    description: Strictly validate the masked synthetic PostgreSQL target against its source copy
+    notes: |
+      Compares the masked disposable target with its synthetic source under dbmask strict
+      validation. Passing does not establish general PostgreSQL, MySQL, or production correctness.
+    category: verify
+    command:
+      exe: python
+      args: ["-m", dbmask.cli, validate, "--config", ".github/ota/dbmask-postgres.yaml", "--strict"]
+    requirements:
+      toolchains: [python]
+      env: [DBMASK_SOURCE_URL, DBMASK_TARGET_URL]
+    effects:
+      network: true
+      network_kind: integration_test
+    depends_on: [postgres:assert-apply]
+
+  postgres:restore-negative-control:
+    description: Restore one original synthetic sensitive value after strict validation
+    notes: |
+      CI/operator-only. Restores one known synthetic full name in the disposable target after
+      the positive strict-validation control, creating a deliberate negative control for the
+      following strict-validation refusal.
+    category: test
+    command:
+      exe: python
+      args: [".github/ota/postgres_fixture.py", "restore-sensitive-negative-control"]
+    requirements:
+      toolchains: [python]
+      env: [DBMASK_SOURCE_URL, DBMASK_TARGET_URL]
+    effects:
+      network: true
+      network_kind: integration_test
+      external_state: [postgres]
+    depends_on: [postgres:validate]
+
+  postgres:strict-negative-control:
+    description: Require strict validation to reject the restored synthetic sensitive value
+    notes: |
+      Runs dbmask strict validation after the deliberate synthetic restoration and fails if the
+      command succeeds. This proves one real masking-completeness negative control only.
+    category: verify
+    script: |
+      report="ota-pressure/postgresql/strict-negative-control.json"
+      mkdir -p "$(dirname "$report")"
+      set +e
+      python -m dbmask.cli validate --config .github/ota/dbmask-postgres.yaml --strict --json >"$report"
+      exit_code=$?
+      set -e
+      if [ "$exit_code" -ne 1 ]; then
+        echo "strict validation did not return the expected masking-completeness refusal" >&2
+        cat "$report" >&2
+        exit 1
+      fi
+      python - "$report" <<'PY'
+      import json
+      import sys
+
+      report = json.load(open(sys.argv[1], encoding="utf-8"))
+      non_pass = [entry for entry in report if entry["status"] != "pass"]
+      expected = {
+          "check": "masking_completeness",
+          "status": "fail",
+          "location": "public.customers.full_name",
+      }
+      if len(non_pass) != 1 or any(non_pass[0].get(key) != value for key, value in expected.items()):
+          raise SystemExit("strict validation did not report the restored full_name masking failure")
+      if non_pass[0].get("detail", {}).get("unmasked_rows") != 1:
+          raise SystemExit("strict validation did not report exactly one restored sensitive value")
+      PY
+      echo "strict negative control confirmed: masking_completeness refused public.customers.full_name with one unmasked row"
+    requirements:
+      toolchains: [python]
+      env: [DBMASK_SOURCE_URL, DBMASK_TARGET_URL]
+    effects:
+      network: true
+      network_kind: integration_test
+    depends_on: [postgres:restore-negative-control]
+
+  postgres:verify:
+    description: Run the bounded disposable PostgreSQL backend proof
+    notes: |
+      Aggregates seed, scan, dry run, apply, direct state assertions, strict validation, and one
+      strict-validation negative control for PostgreSQL 16.10 synthetic data. It is non-blocking
+      pressure evidence, not repository-wide backend proof.
+    category: verify
+    aggregate:
+      tasks: [postgres:strict-negative-control]
+
+workflows:
+  default: contributor
+  contributor:
+    intent: ci_validation
+    description: Run dbmask's existing SQLite contributor suite
+    run:
+      task: test
+  postgres-pressure:
+    intent: ci_validation
+    description: Exercise scan, dry run, apply, and strict validation on disposable synthetic PostgreSQL data
+    run:
+      task: postgres:verify
+    notes: |
+      This workflow exercises only a disposable PostgreSQL service and synthetic data. It does not
+      prove behavior for production databases, every PostgreSQL configuration, MySQL, other SQL
+      engines, release publishing, or the unrelated date-classification edge case under active fix.
+
+agent:
+  posture: readiness_strict
+  entrypoint: test
+  default_task: test
+  safe_tasks:
+    - setup
+    - test
+  verify_after_changes:
+    - test
+  writable_paths:
+    - .ota
+    - .github/ota
+    - .pytest_cache
+    - src
+    - tests
+  protected_paths:
+    - .github/workflows/ci.yml
+    - pyproject.toml
+  bootstrap:
+    ota:
+      note: Install the reviewed Ota v1.6.28 release for this advisory pressure lane.
+      source:
+        kind: version
+        version: v1.6.28
+  notes: |
+    Use `ota tasks --safe --use` before selecting agent work. The PostgreSQL pressure workflow is
+    CI/operator-only because it recreates disposable external databases; it is non-blocking and
+    keeps dbmask's existing SQLite CI unchanged. Its synthetic fixture deliberately has no date
+    column, so it does not exercise or classify the repository's separate date-detection issue.

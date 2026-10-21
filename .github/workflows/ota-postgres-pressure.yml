@@ -49,7 +49,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: ota-run/setup@493cba84bf7f7c11c9e8e996d832d93a89c62184 # v1.0.8
+      - uses: ota-run/setup@85bf49c11a5aa3ddedfa56c47682cfd40b238f1f # v1.0.9
         with:
           source: contract
           contract-path: ota.yaml
@@ -100,7 +100,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: ota-run/setup@493cba84bf7f7c11c9e8e996d832d93a89c62184 # v1.0.8
+      - uses: ota-run/setup@85bf49c11a5aa3ddedfa56c47682cfd40b238f1f # v1.0.9
         with:
           source: contract
           contract-path: ota.yaml

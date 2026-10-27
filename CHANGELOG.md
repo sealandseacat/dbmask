@@ -7,6 +7,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- PK-aligned validation reports partial coverage as a warning, so unchecked
+  rows cannot pass `validate --strict`. Exactly-at-budget tables are recognized
+  as fully checked. `validation.pk_row_limit: null` enables full comparisons;
+  invalid finite budgets are rejected.
+- PK-aligned validation checks source/target key sets. Full key mismatches
+  fail even with equal row counts; bounded mismatches warn about incomplete
+  alignment. Empty tables are skipped instead of claiming that zero aligned
+  rows proved masking.
+- CLI/Runner validation inventories original source columns, without LLM
+  calls or new history suggestions. UNKNOWNs outside explicit value-check
+  columns, imported decisions still requiring review, and omitted sensitive
+  columns now block strict mode. Source-analysis errors fail validation.
+  Existing detection exclusions remain explicit policy choices.
+
 ## [0.1.2] - 2026-09-19
 
 Context-aware detection, stricter format-preserving masking, and reviewed

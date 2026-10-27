@@ -59,6 +59,8 @@ class DetectionPipeline:
         overrides: Optional[FieldOverrides] = None,
         patterns: Optional[PatternMatcher] = None,
         llm: Optional[LLMProvider] = None,
+        *,
+        persist_suggestions: bool = True,
     ):
         self.config = config
         self.history = history
@@ -69,6 +71,7 @@ class DetectionPipeline:
             date_order=config.detection.date_order,
         )
         self.llm = llm
+        self._persist_suggestions = persist_suggestions
         self.stats = PipelineStats()
         self._skip_cols = [re.compile(p, re.IGNORECASE) for p in config.detection.skip_column_patterns]
         self._skip_tables = [re.compile(p, re.IGNORECASE) for p in config.detection.skip_table_patterns]
@@ -188,7 +191,8 @@ class DetectionPipeline:
     def _finalize(self, decision: Decision) -> Decision:
         self.stats.record(decision)
         if (
-            self.history is not None
+            self._persist_suggestions
+            and self.history is not None
             and decision.source not in ("history",)
             # UNKNOWN must not be remembered: persisting it would freeze
             # "could not tell" into a permanent decision.

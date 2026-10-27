@@ -169,17 +169,22 @@ validation:
   check_row_counts: true
   check_schema_elements: true
   check_masking_completeness: true
-  pk_row_limit: 5000            # rows compared per column (PK-aligned mode)
+  pk_row_limit: 5000            # partial coverage warns and fails --strict
+  # Use null for all rows; both columns + keys are retained in memory.
   distinct_value_limit: 5000    # ┐
   max_common_values: 100        # │ fallback heuristic tuning
   max_rows_per_value: 50        # │ (keyless tables only)
   unmasked_evidence_threshold: 10  # ┘
   ignore_test_data: true        # skip 'test', 'n/a', single chars, ...
-  columns: []                   # explicit list, or empty = from history/scan
+  columns: []                   # explicit list, or empty = source inventory
     # - public.customers.email
 ```
 
-What each check proves — and what it can't: [Validation](validation.md).
+Validation inventories the untouched source using overrides, applicable
+reviewed history and patterns, without LLM calls. UNKNOWNs outside an explicit
+column list and imported decisions still requiring review fail strict mode;
+listing some columns does not mark the rest safe. What each check proves —
+and what it can't: [Validation](validation.md).
 
 ## CLI flags worth knowing
 

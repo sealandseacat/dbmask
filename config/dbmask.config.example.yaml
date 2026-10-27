@@ -168,7 +168,8 @@ validation:
   # Masking-completeness tuning.
   # Preferred mode (tables WITH a primary key): source and target rows are
   # aligned on the key and the sensitive column is compared value-by-value.
-  pk_row_limit: 5000              # rows compared per column (key order); report notes partial coverage
+  pk_row_limit: 5000              # partial coverage warns and fails --strict
+  # Set pk_row_limit: null for all rows (both columns + keys retained in memory).
   # Fallback heuristic (tables WITHOUT a usable primary key) — its clean
   # result is a WARNING, not a PASS, because per-row masking can't be proven:
   distinct_value_limit: 5000      # distinct values pulled per column to find overlaps
@@ -178,8 +179,10 @@ validation:
   ignore_test_data: true          # skip noise like 'test', 'n/a', single chars
   # Tip: `dbmask validate --strict` also fails on warnings/skipped checks.
 
-  # Which sensitive columns to run check #3 on. Leave empty to auto-discover
-  # from the history store (preferred) or a fresh scan of the target.
+  # Which sensitive columns to run check #3 on. Empty = discover on the SOURCE
+  # using overrides, applicable reviewed history, and patterns (no LLM calls).
+  # UNKNOWN source columns outside an explicit list and pending reviews still
+  # warn and fail --strict. An explicit list does not mark other columns safe.
   columns: []
     # - public.customers.full_name
     # - public.customers.email

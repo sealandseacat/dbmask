@@ -8,7 +8,8 @@ value-by-value: any row whose masked value is *identical* to its source value
 is a genuine transformation failure. This catches the case the old heuristic
 could not — a row where *this* column survived unmasked while some *other*
 column changed. Coverage is bounded by ``pk_row_limit`` (in key order) and the
-report states explicitly when it was partial.
+report states explicitly when it was partial. Partial comparisons are WARNINGs,
+so strict mode cannot mistake an unchecked tail for verified data.
 
 **Overlap heuristic (fallback, keyless tables).** Without a key there is no
 way to say which target row corresponds to which source row, so the check
@@ -91,21 +92,19 @@ class MaskingCompletenessValidator:
     # -- preferred: primary-key aligned comparison -----------------------------
     def _collect(
         self, conn: Connector, schema: str, table: str,
-        key: list[str], column: str, limit: int,
+        key: list[str], column: str, limit: Optional[int],
     ) -> tuple[dict, bool]:
         rows: dict[tuple, object] = {}
-        truncated = False
         for page in conn.iter_pages(
             schema, table, key_columns=key, columns=[column], batch_size=1000
         ):
             for r in page:
+                # Read one row beyond the budget before claiming truncation.
+                # A table with exactly `limit` rows has been checked in full.
+                if limit is not None and len(rows) >= limit:
+                    return rows, True
                 rows[tuple(r[k] for k in key)] = r[column]
-                if len(rows) >= limit:
-                    truncated = True
-                    break
-            if truncated:
-                break
-        return rows, truncated
+        return rows, False
 
     def _pk_aligned(
         self,
@@ -120,6 +119,8 @@ class MaskingCompletenessValidator:
         src_rows, src_trunc = self._collect(source, schema, table, key, column, cfg.pk_row_limit)
         tgt_rows, tgt_trunc = self._collect(target, schema, table, key, column, cfg.pk_row_limit)
         partial = src_trunc or tgt_trunc
+        source_only = len(src_rows.keys() - tgt_rows.keys())
+        target_only = len(tgt_rows.keys() - src_rows.keys())
 
         compared = 0
         unmasked = 0
@@ -148,6 +149,11 @@ class MaskingCompletenessValidator:
             "key": key,
             "rows_compared": compared,
             "coverage": coverage,
+            "source_rows_inspected": len(src_rows),
+            "target_rows_inspected": len(tgt_rows),
+            # Counts only: natural keys themselves may contain sensitive data.
+            "source_only_keys": source_only,
+            "target_only_keys": target_only,
         }
 
         if unmasked > 0:
@@ -165,14 +171,54 @@ class MaskingCompletenessValidator:
                 detail=detail,
             )
 
-        suffix = f" [{coverage}]" if partial else ""
+        if source_only or target_only:
+            # A bounded prefix cannot establish that a key is absent from the
+            # entire other database (different engine collations may order it
+            # differently). Full comparisons can establish an actual mismatch.
+            return ValidationIssue(
+                check=self.check_name,
+                status=Status.WARNING if partial else Status.FAIL,
+                schema=schema, table=table, column=column,
+                message=(
+                    f"Primary-key sets differ in the inspected ranges: {source_only} "
+                    f"source-only and {target_only} target-only key(s); "
+                    f"{compared} row(s) could be aligned. "
+                    + ("Coverage is partial; keys outside those ranges were not checked."
+                       if partial else "Source and target rows do not match.")
+                ),
+                detail=detail,
+            )
+
+        if not compared:
+            return ValidationIssue(
+                check=self.check_name,
+                status=Status.SKIPPED,
+                schema=schema, table=table, column=column,
+                message="Both tables are empty; no sensitive values were compared.",
+                detail=detail,
+            )
+
+        if partial:
+            return ValidationIssue(
+                check=self.check_name,
+                status=Status.WARNING,
+                schema=schema, table=table, column=column,
+                message=(
+                    f"PK-aligned comparison of {compared} row(s): checked values "
+                    f"differ from their source, but coverage is {coverage}. "
+                    "Remaining rows were not verified; increase validation.pk_row_limit "
+                    "or set it to null for a full comparison."
+                ),
+                detail=detail,
+            )
+
         return ValidationIssue(
             check=self.check_name,
             status=Status.PASS,
             schema=schema, table=table, column=column,
             message=(
                 f"PK-aligned comparison of {compared} row(s): every sensitive "
-                f"value differs from its source.{suffix}"
+                "value differs from its source."
             ),
             detail=detail,
         )

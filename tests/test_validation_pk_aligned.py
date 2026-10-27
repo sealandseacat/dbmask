@@ -99,9 +99,10 @@ def test_partial_coverage_is_stated(tmp_path):
     report = _run(str(tmp_path / "s.db"), str(tmp_path / "t.db"),
                   sensitive=[("main", "people", "email")], cfg=cfg)
     mc = _completeness(report)
-    assert mc[0].status == Status.PASS
+    assert mc[0].status == Status.WARNING
     assert "partial" in mc[0].detail["coverage"]
     assert "partial" in mc[0].message
+    assert not report.passed_strict
 
 
 # -- keyless fallback stays honest ---------------------------------------------

@@ -222,6 +222,7 @@ and exits non-zero for CI gates:
 | Row counts | masking changed values — never added or dropped rows |
 | Schema elements | columns/types, PK, indexes, FKs, constraints all match |
 | Masking completeness | per-row: no sensitive value survived unchanged |
+| Classification coverage | source columns in detection scope are classified or selected for value checks |
 
 Completeness is **primary-key aligned**: source and target rows are matched
 key-by-key and the sensitive column compared value-by-value, which catches a
@@ -229,6 +230,15 @@ row where one field survived unmasked even though others changed. Tables
 without a usable key fall back to a documented heuristic whose clean result
 is a *warning*, not a pass — `--strict` turns any "could not verify" into a
 failure. Reports state their coverage explicitly.
+
+The default PK comparison budget is 5,000 rows per column. Partial coverage
+is a warning and fails `--strict`; set `validation.pk_row_limit: null` for
+all rows (with memory proportional to the selected column and keys). Missing
+or different keys cannot pass a full comparison, and empty tables are skipped.
+The CLI inventories the untouched source without calling an LLM: unresolved
+columns, pending reviews and omitted sensitive columns fail strict mode even
+when `validation.columns` selects only part of the database. See
+[validation scope and limits](docs/validation.md).
 
 ## Supported databases
 

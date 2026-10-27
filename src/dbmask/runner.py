@@ -1,10 +1,11 @@
 """High-level orchestration used by the CLI and as a library entry point."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from dbmask.config import Config
+from dbmask.connectors.base import Connector
 from dbmask.connectors.sql import SQLConnector
 from dbmask.detection.overrides import FieldOverrides
 from dbmask.detection.pipeline import DetectionPipeline, TokenBudgetExceeded
@@ -12,7 +13,7 @@ from dbmask.detection.result import Decision
 from dbmask.history.backend import HistoryBackend, history_backend
 from dbmask.llm.factory import create_provider
 from dbmask.masking.engine import MaskingEngine, TableMaskResult
-from dbmask.validation.result import ValidationReport
+from dbmask.validation.result import Status, ValidationIssue, ValidationReport
 from dbmask.validation.validator import Validator
 
 
@@ -88,15 +89,19 @@ class Runner:
     # -- operations -----------------------------------------------------------
     def scan(self) -> ScanReport:
         """Classify every column in the configured schemas."""
+        return self._scan(self.connector, self.pipeline)
+
+    def _scan(self, connector: Connector, pipeline: DetectionPipeline) -> ScanReport:
+        """Use the same scope and error handling for target and source scans."""
         report = ScanReport()
-        for schema in self.connector.list_schemas():
-            for table in self.connector.list_tables(schema):
-                if self.pipeline.should_skip_table(table):
+        for schema in connector.list_schemas():
+            for table in connector.list_tables(schema):
+                if pipeline.should_skip_table(table):
                     continue
-                for column in self.connector.list_columns(schema, table):
+                for column in connector.list_columns(schema, table):
                     try:
-                        decision = self.pipeline.analyze_column(
-                            self.connector, schema, table, column
+                        decision = pipeline.analyze_column(
+                            connector, schema, table, column
                         )
                         report.decisions.append(decision)
                     except TokenBudgetExceeded as exc:
@@ -144,32 +149,74 @@ class Runner:
         return results
 
     # -- validation -----------------------------------------------------------
-    def _sensitive_columns(self) -> list[tuple[str, str, str]]:
+    def _sensitive_columns(self, scan: ScanReport) -> list[tuple[str, str, str]]:
         """Find sensitive columns to validate.
 
-        Priority: explicit ``validation.columns`` -> the history store ->
-        a fresh scan.
+        An explicit list fixes the value-check scope. Otherwise use a scan of
+        the original source (including applicable reviewed history), never a
+        reclassification of data that has already been masked.
         """
         explicit = self.config.validation.columns
         if explicit:
             out: list[tuple[str, str, str]] = []
             for entry in explicit:
                 parts = entry.split(".")
-                if len(parts) == 3:
-                    out.append((parts[0], parts[1], parts[2]))
+                if len(parts) != 3 or not all(parts):
+                    raise ValueError("validation.columns entries must be schema.table.column")
+                out.append((parts[0], parts[1], parts[2]))
             return out
+        return [(d.schema, d.table, d.column) for d in scan.sensitive]
 
-        if self.history is not None:
-            cols = [
-                (d.schema, d.table, d.column)
-                for d in self.history.all_decisions()
-                if d.is_sensitive and d.database == self.connector.name
-            ]
-            if cols:
-                return cols
+    def _classification_coverage(
+        self, scan: ScanReport, sensitive: list[tuple[str, str, str]],
+    ) -> list[ValidationIssue]:
+        """Unresolved source columns cannot disappear behind a narrower list."""
+        from dbmask.detection.result import Sensitivity
 
-        # Fall back to a fresh scan of the (masked) target database.
-        return [(d.schema, d.table, d.column) for d in self.scan().sensitive]
+        issues: list[ValidationIssue] = []
+        selected = set(sensitive)
+        if scan.errors:
+            issues.append(ValidationIssue(
+                check="classification_coverage", status=Status.ERROR,
+                message=(
+                    f"Source classification was incomplete ({len(scan.errors)} error(s)); "
+                    "scan the untouched source to investigate before sharing the copy."
+                ),
+            ))
+        for d in scan.decisions:
+            location = (d.schema, d.table, d.column)
+            message = ""
+            if d.sensitivity is Sensitivity.UNKNOWN:
+                # Listing a column explicitly declares it sensitive for value
+                # comparison, but never overrides a pending/invalid review.
+                if location in selected and d.source != "history_pending":
+                    continue
+                message = (
+                    "Source column has an unresolved classification or review; "
+                    "classify it with an override or applicable approved history. "
+                    "It cannot be treated as verified."
+                )
+            elif d.is_sensitive and location not in selected:
+                message = (
+                    "Sensitive source column is outside validation.columns and "
+                    "was not checked; include it before treating the copy as verified."
+                )
+            if message:
+                issues.append(ValidationIssue(
+                    check="classification_coverage", status=Status.WARNING,
+                    schema=d.schema, table=d.table, column=d.column, message=message,
+                    detail={"classification_source": d.source},
+                ))
+        if not issues:
+            issues.append(ValidationIssue(
+                check="classification_coverage", status=Status.PASS,
+                message=(
+                    "Every source column in detection scope is classified or explicitly "
+                    "selected for value comparison; no unresolved reviews remain."
+                ),
+                detail={"columns_analyzed": len(scan.decisions)},
+            ))
+        return issues
 
     def validate(self) -> ValidationReport:
         """Validate the masked (target) database against the source database.
@@ -184,17 +231,29 @@ class Runner:
             )
 
         validator = Validator(self.config.validation)
-        sensitive = (
-            self._sensitive_columns()
-            if self.config.validation.check_masking_completeness
-            else None
-        )
         schemas = self.connector.list_schemas()
-
-        with SQLConnector(self.config.source_database) as source:
-            return validator.validate(
+        # History belongs to the target's logical scope, even when the source
+        # has a different connection name. Inspect only configured target schemas.
+        source_config = replace(
+            self.config.source_database, name=self.connector.name, schemas=schemas,
+        )
+        with SQLConnector(source_config) as source:
+            sensitive = None
+            coverage: list[ValidationIssue] = []
+            if self.config.validation.check_masking_completeness:
+                pipeline = DetectionPipeline(
+                    config=self.config, history=self.history,
+                    overrides=self.pipeline.overrides, patterns=self.pipeline.patterns,
+                    llm=None, persist_suggestions=False,
+                )
+                scan = self._scan(source, pipeline)
+                sensitive = self._sensitive_columns(scan)
+                coverage = self._classification_coverage(scan, sensitive)
+            report = validator.validate(
                 source=source,
                 target=self.connector,
                 schemas=schemas,
                 sensitive_columns=sensitive,
             )
+        report.extend(coverage)
+        return report

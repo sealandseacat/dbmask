@@ -41,12 +41,35 @@ email survived unmasked *while the name changed* — the row as a whole
 differs, but the sensitive value is right there.
 
 Coverage is bounded by `validation.pk_row_limit` (default 5 000 rows per
-column, in key order). When a table is larger, the report **says so**:
+column, in key order). A larger table produces a **WARNING**, which fails
+`--strict` even when all inspected values changed:
 
 ```text
-[✓] masking_completeness  main.people.email: PK-aligned comparison of 5000 row(s):
-    every sensitive value differs from its source. [partial — first 5,000 row(s) in key order]
+[!] masking_completeness  main.people.email: PK-aligned comparison of 5000 row(s):
+    checked values differ from their source, but coverage is partial — first 5,000
+    row(s) in key order. Remaining rows were not verified.
 ```
+
+The collector reads one extra row to distinguish a genuinely partial comparison
+from a table with exactly 5 000 rows. Raise the budget above the table size, or
+set it to `null` for an unbounded comparison:
+
+```yaml
+validation:
+  pk_row_limit: null
+```
+
+Full mode retains the selected values and primary keys from both sides in
+memory for each column. Choose a finite budget when memory must be bounded;
+that budget will not pass strict mode if any rows remain unchecked. Zero,
+negative numbers, booleans and non-integer budgets are configuration errors.
+
+Primary-key sets are compared as well as values. With full coverage, missing,
+additional or entirely different keys are a **FAIL**, even when row counts
+match or the row-count check is disabled. With partial coverage, unmatched
+keys in the inspected ranges are a **WARNING**: keys beyond those ranges
+cannot be ruled out. Both modes prevent a strict pass over zero aligned rows.
+Two empty tables produce **SKIPPED**, because no values were compared.
 
 ### Fallback: the overlap heuristic (keyless tables)
 
@@ -74,7 +97,7 @@ Two honesty rules apply to the heuristic:
 | | `passed` (default) | `passed_strict` (`--strict`) |
 |---|---|---|
 | FAIL / ERROR | ✗ | ✗ |
-| WARNING (e.g. keyless heuristic, missing table) | ✓ | ✗ |
+| WARNING (e.g. partial coverage, unresolved source column, missing table) | ✓ | ✗ |
 | SKIPPED (e.g. no sensitive columns supplied) | ✓ | ✗ |
 
 The non-strict summary line names its caveats rather than printing a bare
@@ -88,26 +111,48 @@ Use `--strict` in CI. Use the default interactively while iterating.
 
 ## Which columns get checked?
 
-Priority order:
+`Runner.validate()` and the CLI inventory the **untouched source**, using the
+configured schemas, table exclusions, overrides, applicable reviewed history
+and patterns. Source classification uses the target's logical database name
+for history/override lookup, even when the source connection has another name.
+It never invokes an LLM or appends machine suggestions to history. Applying
+history expiry/type checks can still demote an invalid approval to pending.
 
-1. `validation.columns` — explicit `schema.table.column` list;
-2. the **history store** — everything recorded as sensitive;
-3. a fresh scan of the target.
+- If `validation.columns` is empty, all sensitive columns found in that source
+  inventory receive value checks. Previously stored suggestions cannot hide
+  newly encountered source columns.
+- An explicit `schema.table.column` list fixes the value-check scope. It does
+  **not** silently declare other columns safe. UNKNOWN columns outside the
+  list, imported decisions still requiring review, and known sensitive columns
+  omitted from the list produce `classification_coverage` **WARNINGs**.
+- Explicitly listing an otherwise UNKNOWN column declares it sensitive for
+  value comparison. Its values must then pass the completeness check. Listing
+  it cannot override an imported pending, expired or invalid review.
+- Source classification errors produce a `classification_coverage` **ERROR**.
 
-Explicit is best for CI: the gate then can't quietly narrow because history
-changed.
+Resolve warnings by reviewing overrides or approved history, and by including
+all intended sensitive columns in the value-check scope. An LLM-only decision
+needs review or explicit inclusion; validation does not send source samples
+to a model. `mask` still announces UNKNOWN columns without aborting merely
+because they are UNKNOWN; `validate --strict` is the downstream release gate.
+
+These checks cover the configured detection scope and enabled validation
+checks. Explicitly excluded tables/columns remain policy choices. Low-level
+`Validator.validate()` callers supply their own sensitive-column scope and
+are responsible for classification coverage themselves.
 
 ## Privacy of the reports themselves
 
-FAIL details include the row keys plus **shape-redacted** samples
-(`ma**@co**.***` style), never original values — validation output is safe
-to keep in CI logs.
+Value samples in FAIL details are shape-redacted. Existing unmasked-value
+diagnostics also include row keys, which may themselves be sensitive when
+natural keys such as emails are used; treat those reports as sensitive.
+New key-alignment diagnostics contain counts only, never the unmatched keys.
 
 ## Limits to keep in mind
 
-- The PK-aligned check compares the first `pk_row_limit` rows per column in
-  key order — raise it (or run per-table configs) for full sweeps of very
-  large tables.
+- A finite PK budget compares the first `pk_row_limit` rows per column in key
+  order and fails strict mode if coverage is partial. Full mode (`null`) needs
+  memory proportional to the selected column and keys on both sides.
 - Schema comparison covers what SQLAlchemy exposes portably; triggers and
   grants are not compared (extension point: override
   `Connector.schema_elements`).

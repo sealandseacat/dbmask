@@ -244,8 +244,9 @@ class ValidationConfig:
     # Preferred check: align source and target rows on the primary key and
     # compare the sensitive column value-by-value. This bounds how many rows
     # (in key order) are compared per column; the report says when coverage
-    # was partial.
-    pk_row_limit: int = 5000
+    # was partial. Partial coverage is a WARNING and fails --strict. None
+    # (YAML null) checks all rows, retaining both columns' values in memory.
+    pk_row_limit: Optional[int] = 5000
     # Fallback heuristic (tables without a usable primary key):
     # Max distinct values pulled per column when looking for common values.
     distinct_value_limit: int = 5000
@@ -262,6 +263,14 @@ class ValidationConfig:
     # history store / a fresh scan to find sensitive columns automatically.
     # Otherwise list "schema.table.column" entries explicitly.
     columns: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.pk_row_limit is not None and (
+            isinstance(self.pk_row_limit, bool)
+            or not isinstance(self.pk_row_limit, int)
+            or self.pk_row_limit < 1
+        ):
+            raise ValueError("validation.pk_row_limit must be a positive integer or null")
 
 
 @dataclass

@@ -143,10 +143,32 @@ are responsible for classification coverage themselves.
 
 ## Privacy of the reports themselves
 
-Value samples in FAIL details are shape-redacted. Existing unmasked-value
-diagnostics also include row keys, which may themselves be sensitive when
-natural keys such as emails are used; treat those reports as sensitive.
-New key-alignment diagnostics contain counts only, never the unmatched keys.
+Unmasked-value samples in FAIL details are fully redacted, including
+punctuation. Primary-key **values** are never included in these samples,
+whether the key is numeric, textual or composite. `detail.key` still names
+the key **columns**, so the report describes how alignment was performed.
+Each PK-aligned failure sample has this shape:
+
+```json
+{
+  "row_ref": "row-<random report-local identifier>",
+  "source_row_number": 1,
+  "value": "****************"
+}
+```
+
+The source row number is the 1-based position in the inspected source's PK
+order, not a primary-key value. Reproduce that ordering against the protected
+source when investigating a failure. Random references change between reports
+and have no stored source-key mapping. Key-alignment diagnostics contain
+counts only, never the unmatched keys.
+
+Errors caught by the row-count, schema-element and completeness validators
+suppress raw exception text and SQL parameters. They retain the exception
+class in `detail.error_type` and the affected location. Reports still contain
+schema metadata, counts and value lengths; keep them under appropriate access
+controls. This policy does not sanitize arbitrary exceptions outside these
+validators or operator-requested `--show-values` previews.
 
 ## Limits to keep in mind
 

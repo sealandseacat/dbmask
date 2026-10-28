@@ -156,3 +156,29 @@ if a later row fails validation, earlier batches may already have changed.
 The error is not a database-wide rollback. Restart from an untouched copy
 after fixing the strategy or data. Review exports record the strategy actually
 selected by the engine, including configured overrides.
+
+## Generated and identity-managed columns
+
+Only selected masking columns are assigned by UPDATE; primary keys are carried
+along solely for row addressing. Other ordinary fields and generated columns
+are not assigned. For example, masking `email` can let a database-managed
+`email_lower = lower(email)` recompute itself without trying to write the
+generated column directly. Validate the resulting derived values too.
+
+If a generated/computed column is itself selected for masking, the plan fails
+before target data is written. The same conservative policy applies to all
+reflected identity-managed columns, including BY DEFAULT identities that some
+databases technically allow callers to assign. Ordinary writable columns with
+defaults remain supported. Review the inputs to a generated expression or
+prepare a writable staging representation when it contains sensitive data;
+the engine does not silently skip an unsupported sensitive selection.
+
+`Runner.mask()` preflights every selected table before applying the first one;
+standalone `MaskingEngine.mask_table()` checks its own table, including previews.
+SQL reflection checks computed/identity metadata and explicit read-only flags.
+It cannot discover every trigger, permission or engine-specific restriction,
+and preflight is not a transaction-wide rollback guarantee for runtime errors.
+Custom connectors can implement `non_writable_columns(schema, table)`; its
+default empty result preserves existing connectors without declaring their
+fields universally writable. Direct `SQLConnector.update_rows()` callers must
+provide only the intended update fields plus valid addressing keys.

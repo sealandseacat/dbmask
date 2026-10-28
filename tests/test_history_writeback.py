@@ -102,7 +102,7 @@ def test_llm_suggestion_is_reviewed_overridden_and_reused_without_llm(cli_env, m
 
     def classify(column, values):
         calls.append(column)
-        return LLMResult(True, 'free_text', .7)
+        return LLMResult(True, 'free_text', .9)
 
     monkeypatch.setattr('dbmask.runner.create_provider', lambda cfg: SimpleNamespace(classify=classify))
     cfg = cli_env.make_config(history={'source_file': str(master)}, detection={'user_id': 'analyst'})

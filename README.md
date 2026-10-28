@@ -106,7 +106,8 @@ These are behaviors, not aspirations — each one has a regression test:
   warning instead of a preview that pretends otherwise.
 - **Previews don't leak.** Original values are redacted (`***-**`) in output
   by default (`--show-values` to reveal), dry runs have no side effects, and
-  validation reports carry shape-redacted samples only.
+  validation samples fully redact values and use random row references instead
+  of raw primary-key values, including sensitive natural keys.
 - **Verification is a real gate.** `validate` exits non-zero on failure;
   `--strict` also fails on anything it could not verify.
 
@@ -150,6 +151,10 @@ flowchart TD
   Studio, vLLM), so nothing leaves your network. `llm.send_values: false`
   restricts even a remote provider to column names only. The CLI warns
   explicitly before any values would leave the machine.
+
+Malformed or incomplete LLM responses become `UNKNOWN`, as do answers below
+`llm.min_confidence` (default `0.8`). Review is required before treating those
+columns as safe. See [LLM response handling](docs/llm.md#decision-flow).
 
 ## Masking strategies
 

@@ -60,6 +60,8 @@ llm:
   temperature: 0.0
   max_tokens_budget: 1000000 # hard stop to control cost
   sample_size: 50            # distinct values sent to the model per column
+  min_confidence: 0.8        # valid answers below this become UNKNOWN; finite 0..1
+  # Setting 0 disables only the confidence gate, not strict response validation.
   timeout: 60
   # PRIVACY: with an external provider, sampled values leave your machine.
   # Set send_values: false to send column NAMES only (metadata-only mode) —

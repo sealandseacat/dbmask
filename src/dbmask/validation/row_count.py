@@ -26,7 +26,12 @@ class RowCountValidator:
                 status=Status.ERROR,
                 schema=schema,
                 table=table,
-                message=f"Could not count rows: {exc}",
+                message=(
+                    "Could not count rows; inspect database access and schema. "
+                    "Exception text and query parameters are suppressed "
+                    "because they may contain sensitive values."
+                ),
+                detail={"error_type": type(exc).__name__},
             )
 
         if src == tgt:

@@ -6,6 +6,7 @@ so you never have to commit credentials. See ``config/dbmask.config.example.yaml
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -78,6 +79,18 @@ class LLMConfig:
     # from the column name alone (metadata-only mode). Weaker detection, but
     # nothing sensitive ever leaves the database host.
     send_values: bool = True
+    # Below this threshold the LLM result remains UNKNOWN for human review.
+    # Zero opts out of the confidence gate, never the response/schema checks.
+    min_confidence: float = 0.8
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.min_confidence, bool)
+            or not isinstance(self.min_confidence, (int, float))
+            or not 0 <= self.min_confidence <= 1
+            or not math.isfinite(self.min_confidence)
+        ):
+            raise ValueError("llm.min_confidence must be a finite number in [0, 1]")
 
 
 @dataclass

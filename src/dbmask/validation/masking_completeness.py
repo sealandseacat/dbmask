@@ -26,11 +26,14 @@ contains both ``Tesla`` and ``Apple``; after masking ``Tesla -> Apple`` and
 alarms. All comparisons run in Python, keeping the check database-agnostic —
 source and target can be different engines (e.g. Oracle -> PostgreSQL).
 
-Privacy note: FAIL reports include *redacted* sample values (shape only) plus
-the row keys, so logs stay useful without copying sensitive values into them.
+Privacy note: FAIL reports include fully redacted sample values, random report
+references and positions in the inspected source key order. Primary-key values
+never enter diagnostics; natural keys can themselves be sensitive. References
+are local to the report and cannot be used to test guesses about source keys.
 """
 from __future__ import annotations
 
+import secrets
 from typing import Optional
 
 from dbmask.config import ValidationConfig
@@ -43,10 +46,10 @@ _NONCOMPARABLE_TYPES = ("LOB", "CLOB", "BLOB", "NCLOB", "LONG", "BYTEA", "IMAGE"
 
 
 def _redact(value) -> Optional[str]:
-    """Shape-only redaction so reports never carry sensitive values."""
+    """Preserve length only; punctuation can itself be sensitive data."""
     if value is None:
         return None
-    return "".join("*" if ch.isalnum() else ch for ch in str(value))
+    return "*" * len(str(value))
 
 
 class MaskingCompletenessValidator:
@@ -74,7 +77,12 @@ class MaskingCompletenessValidator:
                 check=self.check_name,
                 status=Status.ERROR,
                 schema=schema, table=table, column=column,
-                message=f"Masking-completeness check failed: {exc}",
+                message=(
+                    "Masking-completeness check failed; inspect database access and "
+                    "schema. Exception text and query parameters are suppressed "
+                    "because they may contain sensitive values."
+                ),
+                detail={"error_type": type(exc).__name__},
             )
 
     def _usable_key(
@@ -125,7 +133,7 @@ class MaskingCompletenessValidator:
         compared = 0
         unmasked = 0
         samples: list[dict] = []
-        for row_key, src_val in src_rows.items():
+        for source_row_number, (row_key, src_val) in enumerate(src_rows.items(), start=1):
             if row_key not in tgt_rows:
                 continue
             compared += 1
@@ -136,7 +144,11 @@ class MaskingCompletenessValidator:
             if src_val == tgt_rows[row_key]:
                 unmasked += 1
                 if len(samples) < 5:
-                    samples.append({"key": repr(row_key), "value": _redact(src_val)})
+                    samples.append({
+                        "row_ref": "row-" + secrets.token_hex(12),
+                        "source_row_number": source_row_number,
+                        "value": _redact(src_val),
+                    })
                 if unmasked >= cfg.unmasked_evidence_threshold:
                     break
 

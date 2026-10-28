@@ -46,7 +46,12 @@ class SchemaElementValidator:
                     status=Status.ERROR,
                     schema=schema,
                     table=table,
-                    message=f"Could not read schema elements: {exc}",
+                    message=(
+                        "Could not read schema elements; inspect database access and schema. "
+                        "Exception text and query parameters are suppressed "
+                        "because they may contain sensitive values."
+                    ),
+                    detail={"error_type": type(exc).__name__},
                 )
             ]
 

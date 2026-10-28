@@ -5,6 +5,9 @@ OpenAI-compatible gateway, or a local server such as Ollama / LM Studio.
 """
 from __future__ import annotations
 
+import json
+import math
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -40,11 +43,54 @@ Sample values:
 
 @dataclass
 class LLMResult:
-    sensitive: bool
+    # None means the response could not establish a classification. This must
+    # never be interpreted as a negative/non-sensitive answer by the pipeline.
+    sensitive: Optional[bool]
     rule: Optional[str]
     confidence: float
     token_usage: int = 0
     raw: str = ""
+    error: str = ""
+
+    def validation_error(self) -> Optional[str]:
+        """Return a fixed, value-free error code, including for custom providers."""
+        if self.error:
+            known = {
+                "invalid_json", "invalid_fields", "invalid_sensitive", "invalid_confidence",
+                "invalid_rule", "invalid_token_usage", "unknown_classification",
+            }
+            return self.error if isinstance(self.error, str) and self.error in known else "invalid_response"
+        if self.sensitive is None:
+            return "unknown_classification"
+        if type(self.sensitive) is not bool:
+            return "invalid_sensitive"
+        if (
+            isinstance(self.confidence, bool)
+            or not isinstance(self.confidence, (int, float))
+            or not 0 <= self.confidence <= 1
+            or not math.isfinite(self.confidence)
+        ):
+            return "invalid_confidence"
+        if self.sensitive:
+            if (
+                not isinstance(self.rule, str)
+                or len(self.rule) > 128
+                or re.fullmatch(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*", self.rule) is None
+            ):
+                return "invalid_rule"
+        elif self.rule is not None:
+            return "invalid_rule"
+        if (
+            isinstance(self.token_usage, bool)
+            or not isinstance(self.token_usage, int)
+            or self.token_usage < 0
+        ):
+            return "invalid_token_usage"
+        return None
+
+
+class LLMProviderError(RuntimeError):
+    """A provider failed; its potentially sensitive exception is not reportable."""
 
 
 class LLMProvider(ABC):
@@ -67,23 +113,40 @@ class LLMProvider(ABC):
 
     @staticmethod
     def parse_response(text: str) -> LLMResult:
-        """Parse the model's JSON line; degrade gracefully if it misbehaves."""
-        import json
-        import re
+        """Accept one complete JSON result; malformed/uncertain answers are UNKNOWN.
 
-        text = (text or "").strip()
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group(0))
-                return LLMResult(
-                    sensitive=bool(data.get("sensitive", False)),
-                    rule=data.get("rule"),
-                    confidence=float(data.get("confidence", 0.5) or 0.0),
-                    raw=text,
-                )
-            except (ValueError, TypeError):
-                pass
-        # Fallback: look for an affirmative word.
-        sensitive = bool(re.search(r"\b(yes|true|sensitive)\b", text, re.IGNORECASE))
-        return LLMResult(sensitive=sensitive, rule=None, confidence=0.3, raw=text)
+        A single whole fenced JSON block is tolerated, but surrounding prose,
+        duplicate fields and multiple answers are rejected rather than guessed.
+        Raw provider text remains available here for private debugging only;
+        it must not be copied into decisions, reports or history.
+        """
+        raw = text.strip() if isinstance(text, str) else ""
+
+        def unknown(code: str) -> LLMResult:
+            return LLMResult(None, None, 0.0, raw=raw, error=code)
+
+        body = raw
+        fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", body, re.DOTALL)
+        if fence:
+            body = fence[1].strip()
+
+        def unique_fields(pairs):
+            result = {}
+            for name, value in pairs:
+                if name in result:
+                    raise ValueError("duplicate_fields")
+                result[name] = value
+            return result
+
+        try:
+            data = json.loads(body, object_pairs_hook=unique_fields)
+        except (ValueError, TypeError, RecursionError):
+            return unknown("invalid_json")
+        if not isinstance(data, dict) or set(data) != {"sensitive", "rule", "confidence"}:
+            return unknown("invalid_fields")
+
+        result = LLMResult(data["sensitive"], data["rule"], data["confidence"], raw=raw)
+        error = result.validation_error()
+        if error:
+            return LLMResult(None, None, 0.0, raw=raw, error=error)
+        return result

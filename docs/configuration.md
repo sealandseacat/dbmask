@@ -117,6 +117,17 @@ Optional fallback for columns the patterns cannot decide — see
 [LLM detection](llm.md) for providers, local setups, and the privacy
 controls (`send_values: false` metadata-only mode).
 
+```yaml
+llm:
+  enabled: false
+  min_confidence: 0.8  # lower-confidence answers become UNKNOWN
+```
+
+The threshold must be finite and between 0 and 1. Zero explicitly disables
+the confidence gate, but malformed or incomplete responses still become
+UNKNOWN. Accepted automatic answers remain pending suggestions, not approved
+history. See [LLM response handling](llm.md#decision-flow).
+
 ## `masking`
 
 ```yaml

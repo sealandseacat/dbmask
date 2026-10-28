@@ -53,6 +53,24 @@ them). dbmask refuses and **announces** this; if the key itself is sensitive
 (emails as natural keys, national IDs), restructure before sharing, or
 exclude those tables.
 
+### Generated and identity-managed columns
+
+Unselected generated fields can recompute from masked inputs; the engine does
+not include them in UPDATE assignments. A selected generated or identity-managed
+field aborts metadata preflight before target-table writes. Identity masking is
+deliberately unsupported even for BY DEFAULT identities writable on some engines.
+Reflection is not a complete permission/trigger check or a rollback mechanism.
+See [column writability](strategies.md#generated-and-identity-managed-columns).
+
+### Diagnostic output
+
+Validation samples use random report-local references and source row positions
+instead of raw primary-key values, and fully redact sample content. Caught
+validation errors and provider-request errors suppress raw exception text.
+Reports still expose operational metadata such as schema names, counts and
+value lengths. Protect reports and inspect other runtime/database exceptions
+before sharing logs; `--show-values` deliberately displays original data.
+
 ### Derived and residual signals
 
 Aggregates, string lengths kept by format-preserving strategies, row order,

@@ -22,7 +22,7 @@ from dbmask.detection.overrides import FieldOverrides
 from dbmask.detection.patterns import PatternAnalysis, PatternMatcher
 from dbmask.detection.result import Decision, Sensitivity
 from dbmask.history.backend import HistoryBackend
-from dbmask.llm.base import LLMProvider
+from dbmask.llm.base import LLMProvider, LLMProviderError, LLMResult
 
 
 class TokenBudgetExceeded(Exception):
@@ -178,7 +178,41 @@ class DetectionPipeline:
             trimmed = sample[: self.config.llm.sample_size]
         else:
             trimmed = []
-        result = self.llm.classify(column, trimmed)  # type: ignore[union-attr]
+        try:
+            result = self.llm.classify(column, trimmed)  # type: ignore[union-attr]
+        except TokenBudgetExceeded:
+            raise
+        except Exception:
+            # Providers may put sampled values, model output or credentials in
+            # exceptions. Preserve scan-incomplete behavior without logging them.
+            raise LLMProviderError("LLM provider failed; investigate privately and retry") from None
+        # Custom providers must meet the same contract as the built-in parser.
+        # Never echo raw model output or provider-controlled error text here.
+        tokens = (
+            result.token_usage
+            if isinstance(result, LLMResult)
+            and type(result.token_usage) is int and result.token_usage >= 0
+            else 0
+        )
+        error = LLMResult.validation_error(result) if isinstance(result, LLMResult) else "invalid_result"
+        if error:
+            return Decision(
+                database=db, schema=schema, table=table, column=column,
+                sensitivity=Sensitivity.UNKNOWN, source="llm_invalid", confidence=0.0,
+                detail=f"LLM response could not be validated ({error}); human review required",
+                token_usage=tokens,
+            )
+        if result.confidence < self.config.llm.min_confidence:
+            return Decision(
+                database=db, schema=schema, table=table, column=column,
+                sensitivity=Sensitivity.UNKNOWN, source="llm_low_confidence",
+                confidence=result.confidence,
+                detail=(
+                    f"LLM confidence is below llm.min_confidence "
+                    f"({self.config.llm.min_confidence:g}); human review required"
+                ),
+                token_usage=tokens,
+            )
         sensitivity = Sensitivity.SENSITIVE if result.sensitive else Sensitivity.NOT_SENSITIVE
         return Decision(
             database=db, schema=schema, table=table, column=column,

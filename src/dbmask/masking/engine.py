@@ -171,6 +171,41 @@ class MaskingEngine:
             )
         return plans
 
+    def preflight_table(
+        self,
+        connector: Connector,
+        schema: str,
+        table: str,
+        decisions: Iterable[Decision],
+        key_columns: Optional[list[str]] = None,
+    ) -> None:
+        """Reject unsupported selected columns before reading or changing rows.
+
+        Runner calls this for every table before applying the first table.
+        Standalone mask_table callers get the same check for their table.
+        This is a metadata check, not a permission probe or transaction guard.
+        """
+        plans = self.plan_table(decisions)
+        if not plans:
+            return
+        known = set(connector.list_columns(schema, table))
+        if any(p.column not in known for p in plans) or (
+            key_columns is not None and any(k not in known for k in key_columns)
+        ):
+            raise MaskingValidationError(
+                f"Cannot mask {schema}.{table}: a selected column or key does not exist"
+            )
+        blocked = connector.non_writable_columns(schema, table)
+        unsupported = [p for p in plans if p.column in blocked]
+        if unsupported:
+            reasons = "; ".join(f"{p.column}: {blocked[p.column]}" for p in unsupported)
+            raise MaskingValidationError(
+                f"Cannot mask {schema}.{table}: selected columns are not writable "
+                f"for masking ({reasons}); review the column policy before applying"
+            )
+        for plan in plans:
+            get_strategy(plan.strategy_name)
+
     # -- value masking --------------------------------------------------------
     def mask_value(self, value, plan: ColumnPlan):
         """Mask one value, reusing its tracked pair when the seed map is on.
@@ -268,8 +303,10 @@ class MaskingEngine:
         batch_size: int = 1000,
         preview_limit: int = 10,
     ) -> TableMaskResult:
+        decisions = list(decisions)
         plans = self.plan_table(decisions)
         keys = key_columns or connector.primary_key_columns(schema, table)
+        self.preflight_table(connector, schema, table, decisions, keys)
 
         # A primary-key column cannot be rewritten in place: the connector
         # (correctly) refuses to change the very values it uses to address
@@ -312,10 +349,16 @@ class MaskingEngine:
         # streaming read used to deadlock databases whose readers block
         # writers (on SQLite the run died with "database is locked" as soon
         # as a table exceeded one batch).
+        # Only selected masking columns belong in SET. Unselected fields may
+        # be computed/read-only or have UPDATE-specific side effects.
+        update_columns = list(dict.fromkeys([*keys, *(p.column for p in plans)]))
         for page in connector.iter_pages(
             schema, table, key_columns=keys, batch_size=batch_size
         ):
-            batch = [_process(row) for row in page]
+            batch = []
+            for row in page:
+                masked = _process(row)
+                batch.append({column: masked[column] for column in update_columns})
             result.rows_written += connector.update_rows(schema, table, keys, batch)
 
         return result

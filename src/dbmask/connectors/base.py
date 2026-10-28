@@ -55,6 +55,16 @@ class Connector(ABC):
         """Return the declared type for history drift checks, or None if unavailable."""
         return None
 
+    def non_writable_columns(self, schema: str, table: str) -> dict[str, str]:
+        """Return column names and reasons they cannot be masked by UPDATE.
+
+        The default preserves compatibility for custom connectors with no
+        writability metadata. Implementations should override it when their
+        source exposes computed, identity-managed or explicit read-only fields.
+        An empty result does not prove database privileges or constraints.
+        """
+        return {}
+
     @abstractmethod
     def sample_values(
         self, schema: str, table: str, column: str, limit: int = 100

@@ -10,8 +10,22 @@ were all inconclusive, and capped by a token budget.
 The LLM sees, per undecided column: the column name and (by default) up to
 `llm.sample_size` distinct sampled values. It answers with
 sensitive/not-sensitive, a rule label (`email`, `address`, …) and a
-confidence. Conclusive answers are persisted to history like any other
-decision.
+confidence. Accepted answers are saved as pending suggestions; only applicable
+approved imports are reused from history. Invalid or uncertain answers become
+`UNKNOWN`, are not saved as decisions and do not authorize masking.
+
+The shared parser accepts a single JSON object (optionally one complete fenced
+JSON block), not a prose or keyword-based guess. It requires a genuine JSON
+boolean, a finite numeric confidence between 0 and 1, and a valid rule for a
+sensitive answer (`null` for a non-sensitive answer). Missing or mistyped
+fields, ambiguous output, and responses such as `I cannot determine this.`
+require review. Custom provider results are checked by the pipeline too.
+
+`llm.min_confidence` defaults to **0.8**. Valid answers below that threshold
+become `UNKNOWN` for either sensitivity outcome. The threshold is configurable
+from 0 to 1; setting 0 explicitly disables only the confidence gate, never
+response validation. Review UNKNOWNs through overrides or approved history.
+Provider raw responses are not copied into decision details or history.
 
 ## Providers
 
@@ -26,6 +40,7 @@ llm:
   base_url:            # blank = api.openai.com; set for Azure/OpenRouter/gateways
   max_tokens_budget: 1000000
   sample_size: 50
+  min_confidence: 0.8
 ```
 
 ### Fully local (nothing leaves your network)
@@ -83,5 +98,6 @@ database. dbmask makes that explicit and controllable:
 - The LLM's answer is stored in history with `source=llm` — audit them with
   `dbmask history --config …`.
 - Confidence is the model's self-report, not a calibrated probability.
+  Passing `min_confidence` is a review policy, not proof of detection accuracy.
   A public benchmark with per-rule precision/recall is on the
   [roadmap](roadmap.md).

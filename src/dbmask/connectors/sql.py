@@ -102,6 +102,24 @@ class SQLConnector(Connector):
                 return str(item["type"])
         raise KeyError(f"Column not found: {schema}.{table}.{column}")
 
+    def non_writable_columns(self, schema: str, table: str) -> dict[str, str]:
+        """Refuse reflected generated/read-only fields and identity masking.
+
+        Identity BY DEFAULT can accept explicit values on some engines, but
+        dbmask conservatively does not rewrite identity-managed columns on any
+        engine. Ordinary defaults are writable and are not excluded here.
+        Reflection cannot discover every trigger, grant or engine restriction.
+        """
+        blocked: dict[str, str] = {}
+        for column in inspect(self._require_engine()).get_columns(table, schema=schema):
+            if column.get("computed") is not None:
+                blocked[column["name"]] = "generated/computed column"
+            elif column.get("identity") is not None:
+                blocked[column["name"]] = "identity-managed column (masking is not supported)"
+            elif column.get("read_only") is True or column.get("readonly") is True:
+                blocked[column["name"]] = "column metadata marks it read-only"
+        return blocked
+
     def _reflect(self, schema: str, table: str) -> Table:
         return Table(
             table,
@@ -222,6 +240,28 @@ class SQLConnector(Connector):
                 "Provide a primary key or specify key columns explicitly."
             )
         tbl = self._reflect(schema, table)
+        # Validate the entire supplied payload before starting any UPDATE.
+        # The engine projects rows to its selected fields; direct callers must
+        # likewise omit generated/read-only fields rather than having them
+        # silently dropped and reported as successfully masked.
+        known = set(tbl.c.keys())
+        if any(k not in known for k in key_columns):
+            raise ValueError(f"Cannot update {schema}.{table}: unknown key columns")
+        selected: set[str] = set()
+        for row in rows:
+            if any(k not in row for k in key_columns):
+                raise ValueError(f"Cannot update {schema}.{table}: a row is missing key columns")
+            selected.update(k for k in row if k not in key_columns)
+        unknown = selected - known
+        if unknown:
+            raise ValueError(f"Cannot update {schema}.{table}: unknown update columns")
+        blocked = self.non_writable_columns(schema, table)
+        unsupported = sorted(selected & blocked.keys())
+        if unsupported:
+            names = ", ".join(unsupported)
+            raise ValueError(
+                f"Cannot update {schema}.{table}: columns are not writable for masking: {names}"
+            )
         affected = 0
         engine = self._require_engine()
         with engine.begin() as conn:

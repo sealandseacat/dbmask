@@ -9,6 +9,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Validation failure samples no longer expose primary-key values. Random
+  report-local references and source row positions replace raw keys, and
+  sample values are fully redacted. Validation error diagnostics suppress
+  exception text and SQL parameters while retaining safe error categories.
+- LLM response parsing no longer guesses a boolean from prose or missing
+  fields. Invalid responses and answers below `llm.min_confidence` (default
+  0.8) become UNKNOWN; custom provider results are validated too. UNKNOWNs
+  are not persisted as decisions or used to authorize masking.
+- Masking updates only selected writable columns. Unselected generated
+  columns are not assigned; explicitly selected generated or identity-managed
+  columns fail preflight before any target-table writes. Writable columns
+  with ordinary defaults remain supported.
+
 - PK-aligned validation reports partial coverage as a warning, so unchecked
   rows cannot pass `validate --strict`. Exactly-at-budget tables are recognized
   as fully checked. `validation.pk_row_limit: null` enables full comparisons;

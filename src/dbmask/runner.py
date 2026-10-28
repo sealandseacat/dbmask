@@ -141,6 +141,12 @@ class Runner:
             if d.is_sensitive:
                 grouped.setdefault((d.schema, d.table), []).append(d)
 
+        # Reject unsupported selected columns across the complete plan before
+        # any target-table update. A later generated column must not leave
+        # earlier tables already changed by an avoidable planning error.
+        for (schema, table), table_decisions in grouped.items():
+            self.masker.preflight_table(self.connector, schema, table, table_decisions)
+
         results: list[TableMaskResult] = []
         for (schema, table), table_decisions in grouped.items():
             results.append(

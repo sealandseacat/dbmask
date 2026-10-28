@@ -15,6 +15,7 @@ from dbmask.dates import parse_date
 from dbmask.detection.patterns import Pattern, PatternMatcher, column_hints
 from dbmask.detection.pipeline import DetectionPipeline
 from dbmask.detection.result import Sensitivity
+from dbmask.llm.base import LLMResult
 from dbmask.masking.engine import ColumnPlan, MaskingEngine
 from dbmask.masking.format import luhn_check_digit
 from dbmask.masking.rules import MaskContext, strat_fake_date
@@ -227,13 +228,13 @@ def _fake_connector(values, dtype="TEXT"):
 
 
 def test_llm_fallback_keeps_pattern_evidence():
-    provider = SimpleNamespace(classify=lambda *args: SimpleNamespace(
-        sensitive=True, rule="email", confidence=0.7, token_usage=10,
+    provider = SimpleNamespace(classify=lambda *args: LLMResult(
+        sensitive=True, rule="email", confidence=0.9, token_usage=10,
     ))
     pipeline = DetectionPipeline(Config(), llm=provider)
     result = pipeline.analyze_column(_fake_connector(["a@example.org"] * 16 + ["bad"] * 4), "s", "t", "email")
     assert result.source == "llm"
-    assert result.confidence == 0.7  # LLM confidence must not become a match ratio.
+    assert result.confidence == 0.9  # LLM confidence must not become a match ratio.
     assert next(c for c in result.pattern_candidates if c.name == "email").ratio == 0.8
     assert "16/20 (80.00%)" in result.detail
 

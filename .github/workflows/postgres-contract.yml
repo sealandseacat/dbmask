@@ -1,0 +1,103 @@
+name: PostgreSQL contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: Synthetic rows per table (customers and orders)
+        type: choice
+        required: true
+        default: "10001"
+        options:
+          - "10001"
+          - "100001"
+          - "200001"
+      seed_map:
+        description: Persist mappings (on matches the application default)
+        type: choice
+        required: true
+        default: "on"
+        options:
+          - "on"
+          - "off"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-contract-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  postgresql:
+    name: PostgreSQL contract (16 / py3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres@sha256:029660641a0cfc575b14f336ba448fb8a75fd595d42e1fa316b9fb4378742297 # 16.10-alpine
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: dbmask
+          POSTGRES_PASSWORD: dbmask-contract-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dbmask -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DBMASK_RUN_POSTGRES_CONTRACT: "1"
+      DBMASK_CONTRACT_SOURCE_URL: postgresql+psycopg2://dbmask:dbmask-contract-only@localhost:5432/dbmask_contract_source
+      DBMASK_CONTRACT_TARGET_URL: postgresql+psycopg2://dbmask:dbmask-contract-only@localhost:5432/dbmask_contract_target
+      DBMASK_CONTRACT_OUTPUT: postgres-contract-evidence/run
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prepare evidence directory
+        run: |
+          mkdir -p postgres-contract-evidence
+          git rev-parse HEAD > postgres-contract-evidence/commit.txt
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install development and PostgreSQL dependencies
+        run: python -m pip install -e ".[dev,postgres]"
+      - name: Check contract tooling
+        run: python -m ruff check scripts/ tests/test_postgres_contract_tool.py tests/integration/test_postgresql_contract.py
+      - name: Verify 10,001 rows per table
+        if: github.event_name != 'workflow_dispatch'
+        run: python -m pytest tests/integration/test_postgresql_contract.py --junitxml=postgres-contract-evidence/junit.xml
+      - name: Require executed integration tests
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("postgres-contract-evidence/junit.xml").findall(".//testcase")
+          if not cases or any(case.find(tag) is not None for case in cases
+                              for tag in ("skipped", "failure", "error")):
+              raise SystemExit("PostgreSQL integration tests must execute without skips or failures")
+          PY
+      - name: Verify selected synthetic scale
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CONTRACT_ROWS: ${{ inputs.rows }}
+          CONTRACT_SEED_MAP: ${{ inputs.seed_map }}
+        run: >-
+          python scripts/postgres_contract.py
+          --rows "$CONTRACT_ROWS"
+          --seed-map "$CONTRACT_SEED_MAP"
+          --output postgres-contract-evidence/run
+          --allow-reset-disposable-databases
+      - name: Retain PostgreSQL contract evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dbmask-postgres-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: postgres-contract-evidence/
+          if-no-files-found: error
+          retention-days: 30

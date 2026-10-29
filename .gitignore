@@ -29,6 +29,9 @@ dbmask_seedmap.db
 # Fresh output folders from examples/issue36_demo.py
 /issue36-demo-*/
 
+# Disposable PostgreSQL contract reports and local mapping stores
+/postgres-contract-evidence/
+
 # Ota local runtime artifacts
 .ota/state/*
 .ota/contracts/*

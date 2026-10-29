@@ -7,6 +7,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- A disposable PostgreSQL contract runner generates matching synthetic source
+  and target databases, checks masking independently with SQL, performs full
+  strict validation, and requires precise refusals for deliberately injected
+  faults. A separate Linux/Python 3.12/PostgreSQL 16.10 job runs 10,001 rows per
+  table on PRs/main; manual 100,001/200,001-row runs retain timing, Python worker
+  memory and check evidence. These are test entry points, not unmeasured scale
+  or universal database-support claims.
+
 ### Fixed
 
 - Validation failure samples no longer expose primary-key values. Random

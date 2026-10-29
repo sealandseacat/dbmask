@@ -251,8 +251,22 @@ The connector is a single SQLAlchemy code path, so PostgreSQL, MySQL/MariaDB,
 SQL Server, Oracle, SQLite and anything else with a SQLAlchemy dialect are
 *wired up* (`pip install "dbmask[postgres]"` etc.).
 
+The ordinary automated suite exercises **SQLite** on CPython 3.9–3.14,
+with Linux and Windows CI coverage.
+
 PostgreSQL 16.10 has been tested on Linux using Python 3.12 and `psycopg2` with basic synthetic data. The test coverage includes scanning, previewing, actual data masking, ensuring source databases and reserved fields remain unchanged, strict validation, and the successful interception of an operation when a single sensitive value is intentionally restored. The current test utilizes a single table with three rows of data; it does not yet cover large tables or complex database relationships. This workflow does not currently block merges or releases. Please find the workflow run record here: [Evidence: Ota PostgreSQL pressure](https://github.com/sealandseacat/dbmask/actions/runs/40892527475)
-please
+
+A separate [PostgreSQL contract workflow](.github/workflows/postgres-contract.yml)
+is configured to generate 10,001 customers plus 10,001 orders on PRs/main,
+with explicit column decisions, real constraints, full comparison and fault
+controls. Manual runs select 100,001 or 200,001 rows **per table** and record
+timing and Python worker memory. This job does not ignore failures; repository
+rules determine whether its status blocks merging. New scale claims require
+successful retained run evidence; adding the workflow alone does not establish
+capacity. See [scope, execution and limits](docs/postgresql-contract.md).
+
+MySQL/MariaDB, SQL Server, Oracle and other dialects are wired up but are not
+verified by these PostgreSQL workflows. Please
 [report](https://github.com/sealandseacat/dbmask/issues) anything that
 misbehaves.
 
@@ -310,7 +324,8 @@ safety envelope real (fail-closed scanning, PK-aligned verification, valid
 typed output, no PII in previews/logs — see the
 [changelog](CHANGELOG.md)). Near-term roadmap:
 
-- PostgreSQL & MySQL integration tests in CI (testcontainers)
+- Broader PostgreSQL type/version coverage, installed-wheel release checks,
+  and MySQL integration tests in CI
 - A public detection benchmark (precision/recall per rule, fixed datasets)
 - Run manifests: idempotency, resume, and "what exactly did this run touch"
 - A small, stable public Python API (`scan / apply / verify`) with a

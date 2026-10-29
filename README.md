@@ -251,7 +251,7 @@ The connector is a single SQLAlchemy code path, so PostgreSQL, MySQL/MariaDB,
 SQL Server, Oracle, SQLite and anything else with a SQLAlchemy dialect are
 *wired up* (`pip install "dbmask[postgres]"` etc.).
 
-PostgreSQL 16.10 has been tested on Linux using Python 3.12 and `psycopg2` with basic synthetic data. The test coverage includes scanning, previewing, actual data masking, ensuring source databases and reserved fields remain unchanged, strict validation, and the successful interception of an operation when a single sensitive value is intentionally restored. The current test utilizes a single table with three rows of data; it does not yet cover large tables or complex database relationships. This workflow does not currently block merges or releases. Please find the workflow run record here: https://github.com/sealandseacat/dbmask/actions/runs/40892527475
+PostgreSQL 16.10 has been tested on Linux using Python 3.12 and `psycopg2` with basic synthetic data. The test coverage includes scanning, previewing, actual data masking, ensuring source databases and reserved fields remain unchanged, strict validation, and the successful interception of an operation when a single sensitive value is intentionally restored. The current test utilizes a single table with three rows of data; it does not yet cover large tables or complex database relationships. This workflow does not currently block merges or releases. Please find the workflow run record here: [Evidence: Ota PostgreSQL pressure](https://github.com/sealandseacat/dbmask/actions/runs/40892527475)
 please
 [report](https://github.com/sealandseacat/dbmask/issues) anything that
 misbehaves.

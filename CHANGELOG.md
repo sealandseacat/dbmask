@@ -7,6 +7,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-29
+
 ### Added
 
 - A disposable PostgreSQL contract runner generates matching synthetic source
@@ -281,7 +283,8 @@ First public release.
   validation with `twine check --strict` on every push and pull request.
 - `CONTRIBUTING.md`, `SECURITY.md`, and this changelog.
 
-[Unreleased]: https://github.com/sealandseacat/dbmask/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/sealandseacat/dbmask/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/sealandseacat/dbmask/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/sealandseacat/dbmask/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/sealandseacat/dbmask/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sealandseacat/dbmask/releases/tag/v0.1.0

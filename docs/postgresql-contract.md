@@ -29,15 +29,99 @@ the application's default. For example, `100001` means 200,002 database rows
 across the two tables, not 100,001 rows in total. Compare timings only when the
 environment, schema and mapping mode match.
 
-Download the `dbmask-postgres-contract-…` artifact even when a run fails. Read
-`run/report.json` and the stage logs to distinguish a contract failure from setup or
-connection failure. A passing run must contain the expected checks and full
-coverage; a missing service, missing driver, empty test selection or skipped
-integration test is not an acceptable result in the dedicated job.
+Every successful full contract run also exports CSVs and an offline HTML review.
+Select **include_dumps** only if you also want restorable PostgreSQL archives;
+it defaults to `false`. In CI, this option uses `pg_dump` inside the PostgreSQL
+service container, so its version matches the server.
+
+GitHub requires repository write access to
+[run a workflow manually](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+An external reviewer can fork the repository, open the fork's **Actions** tab
+and enable workflows, then select **PostgreSQL contract → Run workflow** there.
+The workflow must be present on the fork's default branch. Start with `10001`
+rows per table; retain the selected mapping mode and commit with the result.
+The workflow installs `.[dev,postgres]` from the checked-out repository, so this
+tests that checkout, not the separately published PyPI package.
 
 A red job makes the workflow fail, but preventing merges also requires a
 repository rule that marks **PostgreSQL contract (16 / py3.12)** as required.
 This patch does not change repository rules or add a release-publishing gate.
+
+## Download and inspect a run
+
+Open **Actions → PostgreSQL contract → the completed run → Summary**, scroll to
+**Artifacts**, and download `dbmask-postgres-contract-…`. GitHub requires a
+signed-in account with read access to
+[download artifacts](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts).
+Extract the ZIP before opening `run/review/index.html` in a browser. The HTML
+works offline and embeds its review samples; no database connection or web
+server is needed.
+
+Paths below are relative to the extracted Actions artifact:
+
+| File | Contents |
+| --- | --- |
+| `commit.txt` | The checked-out Git commit. |
+| `run/report.json` | Contract checks, environment, coverage and stage results. |
+| `run/review/index.html` | Before/after samples aligned by primary key. |
+| `run/review/manifest.json` | Exported row counts, primary keys, file SHA-256 hashes and CSV conventions. |
+| `run/review/csv/customers.before.csv` | All synthetic source customer rows. |
+| `run/review/csv/customers.after.csv` | All final masked customer rows. |
+| `run/review/csv/orders.before.csv` | All synthetic source order rows. |
+| `run/review/csv/orders.after.csv` | All final masked order rows. |
+| `run/review/source.dump` | Optional custom-format archive of the synthetic source database. |
+| `run/review/masked.dump` | Optional custom-format archive of the final masked database. |
+
+The HTML displays a limited sample, while all four CSVs contain the complete
+tables. Compare customers by `id` and orders by `(tenant_id, order_id)`, as
+recorded in the manifest. In these CSVs, SQL NULL is the **unquoted** token
+`\N`; every non-NULL value is quoted. Thus `""` is an empty string and `"\N"`
+is literal backslash-N text, distinct from SQL NULL. Use an importer that
+preserves this quoted-versus-unquoted distinction when checking NULL values.
+
+Exports are produced only after the positive contract, all expected negative
+controls and the final restoration checks succeed. The masked output is the
+normal final target, after deliberately injected faults have been undone.
+All exported values come from the fixed synthetic fixture.
+
+Download the artifact even when a run fails, but treat its report and stage
+logs as failure diagnostics, not a complete before/after review. Read
+`run/report.json` and the stage logs to distinguish a contract failure from
+setup, connection or export failure. A passing run must contain the expected
+checks and full coverage; a missing service, missing driver, empty test
+selection or skipped integration test is not an acceptable result in the
+dedicated job.
+
+### Restore the optional dumps locally
+
+The `.dump` files use PostgreSQL's
+[custom archive format](https://www.postgresql.org/docs/16/app-pgdump.html),
+which is read by `pg_restore`. Use the same major version of `pg_restore` as
+the exporting `pg_dump`, or a compatible newer version. The CI service is
+PostgreSQL 16.10; a matching local PostgreSQL installation is the simplest
+choice for reproducing its contents.
+
+From the extracted artifact directory, create **two new local databases** and
+restore each archive into its own database. This example uses the local
+`postgres` role; substitute your local role with permission to create databases:
+
+```bash
+set -e
+createdb --host=localhost --username=postgres --template=template0 dbmask_review_source
+createdb --host=localhost --username=postgres --template=template0 dbmask_review_masked
+pg_restore --host=localhost --username=postgres --exit-on-error --no-owner --no-acl \
+  --dbname=dbmask_review_source run/review/source.dump
+pg_restore --host=localhost --username=postgres --exit-on-error --no-owner --no-acl \
+  --dbname=dbmask_review_masked run/review/masked.dump
+```
+
+If either name already exists, choose a different new name in both its
+`createdb` and `pg_restore` commands. These commands do not replace an existing
+database. The restore skips original ownership and access privileges through
+[`--no-owner` and `--no-acl`](https://www.postgresql.org/docs/16/app-pgrestore.html);
+custom archives can still record original owner names as metadata. The two
+restored databases can then be queried side by side using the same primary
+keys as the CSV review.
 
 ## What the fixture tests
 
@@ -80,6 +164,8 @@ Use an isolated, disposable PostgreSQL service. The runner deliberately requires
 local URLs, its dedicated synthetic account and exact database names. It drops
 and recreates those two databases; the explicit reset flag is mandatory. Never
 point it at an existing business database or reuse production credentials.
+Run only one contract at a time against the same local database pair, so another
+run cannot reset or change the data while it is being checked or exported.
 
 From a fresh repository checkout, after installing `.[dev,postgres]`, start the
 same fixed service image used in CI (Docker must already be running):
@@ -104,6 +190,12 @@ export DBMASK_CONTRACT_TARGET_URL='postgresql+psycopg2://dbmask:dbmask-contract-
 python scripts/postgres_contract.py --rows 10001 --seed-map off \
   --output postgres-contract-evidence --allow-reset-disposable-databases
 ```
+
+The same review package is created under `<output>/review/` after a successful
+local run. Add `--include-dumps` to include the two archives, using a suitable
+`pg_dump` on `PATH`, or pass `--pg-dump /path/to/pg_dump` to choose its executable.
+Use a client matching the server version or a compatible newer client; older
+`pg_dump` versions cannot dump a newer server major version.
 
 For PowerShell, use `$env:DBMASK_CONTRACT_SOURCE_URL = "…"` and the corresponding
 target variable; put the Python command on one line. Change `--rows` to `100001`

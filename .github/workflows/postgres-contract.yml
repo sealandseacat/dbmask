@@ -23,6 +23,10 @@ on:
         options:
           - "on"
           - "off"
+      include_dumps:
+        description: Include restorable synthetic source and masked PostgreSQL dumps
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -67,7 +71,7 @@ jobs:
       - name: Install development and PostgreSQL dependencies
         run: python -m pip install -e ".[dev,postgres]"
       - name: Check contract tooling
-        run: python -m ruff check scripts/ tests/test_postgres_contract_tool.py tests/integration/test_postgresql_contract.py
+        run: python -m ruff check scripts/ tests/test_postgres_contract_tool.py tests/test_postgres_contract_review.py tests/integration/test_postgresql_contract.py
       - name: Verify 10,001 rows per table
         if: github.event_name != 'workflow_dispatch'
         run: python -m pytest tests/integration/test_postgresql_contract.py --junitxml=postgres-contract-evidence/junit.xml
@@ -82,17 +86,35 @@ jobs:
                               for tag in ("skipped", "failure", "error")):
               raise SystemExit("PostgreSQL integration tests must execute without skips or failures")
           PY
+      - name: Use the service's matching pg_dump
+        if: github.event_name == 'workflow_dispatch' && inputs.include_dumps
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/dbmask-contract-pg-dump" <<'BASH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec docker exec --env PGPASSWORD="$PGPASSWORD" --env PGCONNECT_TIMEOUT="$PGCONNECT_TIMEOUT" "$DBMASK_CONTRACT_POSTGRES_CONTAINER" pg_dump "$@"
+          BASH
+          chmod +x "$RUNNER_TEMP/dbmask-contract-pg-dump"
       - name: Verify selected synthetic scale
         if: github.event_name == 'workflow_dispatch'
+        shell: bash
         env:
           CONTRACT_ROWS: ${{ inputs.rows }}
           CONTRACT_SEED_MAP: ${{ inputs.seed_map }}
-        run: >-
-          python scripts/postgres_contract.py
-          --rows "$CONTRACT_ROWS"
-          --seed-map "$CONTRACT_SEED_MAP"
-          --output postgres-contract-evidence/run
-          --allow-reset-disposable-databases
+          CONTRACT_INCLUDE_DUMPS: ${{ inputs.include_dumps }}
+          DBMASK_CONTRACT_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          args=(
+            --rows "$CONTRACT_ROWS"
+            --seed-map "$CONTRACT_SEED_MAP"
+            --output postgres-contract-evidence/run
+            --allow-reset-disposable-databases
+          )
+          if [[ "$CONTRACT_INCLUDE_DUMPS" == "true" ]]; then
+            args+=(--include-dumps --pg-dump "$RUNNER_TEMP/dbmask-contract-pg-dump")
+          fi
+          python scripts/postgres_contract.py "${args[@]}"
       - name: Retain PostgreSQL contract evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -11,6 +11,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -30,6 +31,7 @@ from _postgres_contract_fixture import (
     validate_rows,
     validate_urls,
 )
+from _postgres_contract_review import ReviewExportError, export_review_bundle
 from sqlalchemy import create_engine, text
 
 SOURCE_ENV = "DBMASK_CONTRACT_SOURCE_URL"
@@ -249,7 +251,8 @@ def metadata(source: str, seed_map: bool) -> dict:
         "llm_enabled": False, "detection_scope": "explicit reviewed synthetic columns",
         "fixture_version": 1, "masking_seed": "dbmask-contract-synthetic-v1",
         "file_sha256": {name: hashlib.sha256((repository / "scripts" / name).read_bytes()).hexdigest()
-                        for name in ("postgres_contract.py", "_postgres_contract_fixture.py")},
+                        for name in ("postgres_contract.py", "_postgres_contract_fixture.py",
+                                     "_postgres_contract_review.py")},
         "memory_scope": "per-stage Python worker peaks; excludes PostgreSQL and other processes",
     }
 
@@ -263,9 +266,12 @@ def run_contract(args) -> int:
     output = args.output.resolve()
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         raise ValueError("output must be a new or empty directory; keep earlier evidence separately")
+    if args.include_dumps and shutil.which(args.pg_dump) is None:
+        raise ValueError("--include-dumps requires pg_dump; install the PostgreSQL client or use --pg-dump PATH")
     output.mkdir(parents=True, exist_ok=True)
     report = {"status": "running", "started_at_utc": datetime.now(timezone.utc).isoformat(),
               "rows_per_table": args.rows, "total_fixture_rows": args.rows * 2,
+              "review_artifacts": {"status": "not_created", "dumps_requested": args.include_dumps},
               "stages": {}, "negative_controls": {}, "limitations": [
                   "Only this synthetic fixture, selected types, engine/version and configuration are exercised.",
                   "No detection accuracy benchmark, sensitive-key rewriting, release-wheel gate or resume guarantee.",
@@ -348,10 +354,22 @@ def run_contract(args) -> int:
         check_positive(final.get("result", []), args.rows)
         report["stages"][phase] = final
         report["status"] = "passed"
+        # Export only the untouched source and the fully restored positive target.
+        # A requested export failure fails the run instead of publishing a partial bundle.
+        phase = "review-artifacts"
+        export_started = time.perf_counter()
+        bundle = export_review_bundle(
+            source, target, args.rows, output, report,
+            include_dumps=args.include_dumps, pg_dump=args.pg_dump,
+        )
+        report["review_artifacts"] = {
+            **bundle, "status": "created", "dumps_requested": args.include_dumps,
+            "elapsed_seconds": round(time.perf_counter() - export_started, 6),
+        }
     except Exception as exc:
         report["status"] = "failed"
         report["failure"] = {"phase": phase, "error_type": type(exc).__name__}
-        if isinstance(exc, AssertionError):
+        if isinstance(exc, (AssertionError, ReviewExportError)):
             report["failure"]["message"] = str(exc)
     finally:
         report["elapsed_seconds"] = round(time.perf_counter() - started, 6)
@@ -362,6 +380,7 @@ def run_contract(args) -> int:
     if report["status"] != "passed":
         print(f"Stopped in phase: {phase}", file=sys.stderr)
         return 1
+    print(f"Review: {output / 'review' / 'index.html'}")
     return 0
 
 
@@ -373,6 +392,10 @@ def main(arguments=None) -> int:
     parser.add_argument("--rows", type=int, default=10001, help="Customers and orders each have this many rows (5001..200001).")
     parser.add_argument("--output", type=Path, default=Path("postgres-contract-evidence"))
     parser.add_argument("--seed-map", choices=("on", "off"), default="off")
+    parser.add_argument("--include-dumps", action="store_true",
+                        help="Also export custom-format PostgreSQL dumps of the synthetic pair.")
+    parser.add_argument("--pg-dump", default="pg_dump",
+                        help="pg_dump executable (or a compatible service-container wrapper).")
     parser.add_argument("--allow-reset-disposable-databases", action="store_true",
                         help="Allow recreation of only the two fixed local synthetic databases.")
     args = parser.parse_args(arguments)

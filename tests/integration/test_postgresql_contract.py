@@ -1,6 +1,7 @@
 """Real PostgreSQL contract; explicitly opt in outside the dedicated CI job."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -8,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
 
 
 def test_generated_postgresql_contract(tmp_path):
@@ -36,3 +38,43 @@ def test_generated_postgresql_contract(tmp_path):
         "restore_email_5001", "restore_email_last", "missing_order", "replace_order_key", "drop_unique",
     }
     assert all(case["expected_refusal_confirmed"] for case in report["negative_controls"].values())
+    assert report["review_artifacts"]["status"] == "created"
+    assert report["review_artifacts"]["dumps_requested"] is False
+    bundle = output / "review"
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["rows_per_table"] == 10001
+    assert not (bundle / "source.dump").exists()
+    for item in manifest["files"]:
+        content = (bundle / item["path"]).read_bytes()
+        assert len(content) == item["bytes"]
+        assert hashlib.sha256(content).hexdigest() == item["sha256"]
+
+    # PostgreSQL itself must decode the exported CSV back to exactly the original
+    # typed values, including NULLs, dates, numerics and the generated total.
+    for side, variable in (("before", "DBMASK_CONTRACT_SOURCE_URL"),
+                           ("after", "DBMASK_CONTRACT_TARGET_URL")):
+        engine = create_engine(os.environ[variable])
+        try:
+            connection = engine.raw_connection()
+            try:
+                with connection.cursor() as cursor:
+                    for table in ("customers", "orders"):
+                        temporary = "review_csv_" + table
+                        cursor.execute(f"CREATE TEMP TABLE {temporary} AS SELECT * FROM public.{table} WITH NO DATA")
+                        with (bundle / "csv" / f"{table}.{side}.csv").open(encoding="utf-8", newline="") as stream:
+                            cursor.copy_expert(
+                                f"COPY {temporary} FROM STDIN WITH (FORMAT CSV, HEADER TRUE, NULL '\\N')",
+                                stream,
+                            )
+                        cursor.execute(f"SELECT count(*) FROM {temporary}")
+                        assert cursor.fetchone()[0] == 10001
+                        cursor.execute(
+                            f"SELECT EXISTS (SELECT * FROM public.{table} EXCEPT ALL SELECT * FROM {temporary}) "
+                            f"OR EXISTS (SELECT * FROM {temporary} EXCEPT ALL SELECT * FROM public.{table})"
+                        )
+                        assert cursor.fetchone()[0] is False, f"{table}.{side}.csv changed a database value"
+            finally:
+                connection.rollback()
+                connection.close()
+        finally:
+            engine.dispose()

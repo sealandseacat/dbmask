@@ -7,6 +7,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Successful PostgreSQL contract runs export an offline, primary-key-aligned
+  before/after HTML review, four complete synthetic-data CSVs, and a manifest
+  with row counts, primary keys, SHA-256 hashes and CSV NULL conventions.
+  Optional custom-format source and masked dumps support local restoration;
+  manual Actions runs use the service container's matching `pg_dump`.
+  Exports represent the final restored positive target after all negative
+  controls pass. CSV/HTML review is automatic; database dumps are opt-in.
+
 ## [0.1.3] - 2026-10-29
 
 ### Added

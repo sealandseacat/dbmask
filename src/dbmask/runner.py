@@ -1,18 +1,21 @@
 """High-level orchestration used by the CLI and as a library entry point."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from typing import Optional
+from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
 
 from dbmask.config import Config
 from dbmask.connectors.base import Connector
 from dbmask.connectors.sql import SQLConnector
 from dbmask.detection.overrides import FieldOverrides
 from dbmask.detection.pipeline import DetectionPipeline, TokenBudgetExceeded
-from dbmask.detection.result import Decision
+from dbmask.detection.result import Decision, Sensitivity
 from dbmask.history.backend import HistoryBackend, history_backend
 from dbmask.llm.factory import create_provider
 from dbmask.masking.engine import MaskingEngine, TableMaskResult
+from dbmask.run_record import RunRecord, config_fingerprint, inventory, target_identity
 from dbmask.validation.result import Status, ValidationIssue, ValidationReport
 from dbmask.validation.validator import Validator
 
@@ -49,6 +52,7 @@ class Runner:
 
     def __init__(self, config: Config):
         self.config = config
+        self.last_run_file: Optional[str] = None
         self.connector = SQLConnector(config.database)
         self.history: Optional[HistoryBackend] = (
             history_backend(config.history) if config.history.enabled else None
@@ -111,47 +115,181 @@ class Runner:
                         report.errors.append(f"{schema}.{table}.{column}: {exc}")
         return report
 
+    # -- persisted plans ------------------------------------------------------
+    def create_run(
+        self, run_file: Optional[str] = None, scan: Optional[ScanReport] = None,
+    ) -> RunRecord:
+        """Freeze metadata and resolved strategies, never sample values.
+
+        A plan is a draft until explicitly approved. Automatic legacy masks
+        also get records, but are clearly labelled unreviewed.
+        """
+        if scan is None:
+            scan = self.scan()
+        scope = inventory(self.connector, self.connector.list_schemas())
+        decisions = []
+        for d in scan.decisions:
+            decisions.append({
+                "database": d.database, "schema": d.schema, "table": d.table,
+                "column": d.column, "sensitivity": d.sensitivity.value,
+                "rule": d.rule, "source": d.source,
+                "confidence": d.confidence, "data_type": d.data_type,
+                "review_status": d.review_status, "reviewed_by": d.reviewed_by,
+                "reviewed_at": d.reviewed_at, "user_id": d.user_id,
+                "masking_strategy": self.masker.resolve_strategy(d) if d.is_sensitive else None,
+            })
+        path = Path(run_file) if run_file else Path(self.config.audit.directory) / (
+            datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f") + ".json"
+        )
+        source = None
+        if self.config.source_database.url or self.config.source_database.dialect:
+            source = target_identity(self.config.source_database)
+        record = RunRecord.create(
+            path, target=target_identity(self.config.database), source=source,
+            config_digest=config_fingerprint(self.config), scope=scope,
+            decisions=decisions, scan_error_count=len(scan.errors),
+            validation=asdict(self.config.validation),
+        )
+        self.last_run_file = str(record.path)
+        return record
+
+    @staticmethod
+    def _record_scan(record: RunRecord) -> ScanReport:
+        decisions = [Decision(**item) for item in (
+            {**d, "sensitivity": Sensitivity(d["sensitivity"])}
+            for d in record.data["plan"]["decisions"]
+        )]
+        return ScanReport(
+            decisions=decisions,
+            errors=["Recorded scan error (details suppressed)"]
+                   * record.data["plan"]["scan_error_count"],
+        )
+
+    def _check_run_scope(self, record: RunRecord) -> None:
+        record.check_config(self.config)
+        current = inventory(self.connector, self.connector.list_schemas())
+        if current != record.data["plan"]["scope"]:
+            raise ValueError("Target schema drift: create and review a new plan before proceeding")
+
     def mask(
         self,
         decisions: Optional[list[Decision]] = None,
         *,
         allow_partial: bool = False,
+        run_file: Optional[str] = None,
+        remask_reason: Optional[str] = None,
+        scan_report: Optional[ScanReport] = None,
     ) -> list[TableMaskResult]:
-        """Mask all sensitive columns. Runs a scan first if not given decisions.
+        """Mask from a frozen plan, recording every committed page.
 
-        Fails closed: if the internal scan could not analyze every column,
-        a :class:`ScanIncompleteError` is raised instead of silently masking
-        only the columns that happened to scan cleanly. Pass
-        ``allow_partial=True`` (CLI: ``--allow-partial``) to accept a partial
-        scan explicitly.
+        Supplying ``run_file`` requires explicit plan approval. Legacy callers
+        remain supported and get an automatic, unreviewed run record. The
+        shared audit directory must be retained for repeat masking detection.
         """
-        if decisions is None:
-            report = self.scan()
-            if report.errors and not allow_partial:
-                raise ScanIncompleteError(
-                    f"{len(report.errors)} column(s) could not be analyzed; "
-                    "unanalyzed columns would be silently left unmasked. "
-                    "Errors:\n  - " + "\n  - ".join(report.errors)
-                )
-            decisions = report.decisions
-
-        # Group sensitive decisions by (schema, table).
-        grouped: dict[tuple[str, str], list[Decision]] = {}
-        for d in decisions:
-            if d.is_sensitive:
-                grouped.setdefault((d.schema, d.table), []).append(d)
-
-        # Reject unsupported selected columns across the complete plan before
-        # any target-table update. A later generated column must not leave
-        # earlier tables already changed by an avoidable planning error.
-        for (schema, table), table_decisions in grouped.items():
-            self.masker.preflight_table(self.connector, schema, table, table_decisions)
-
-        results: list[TableMaskResult] = []
-        for (schema, table), table_decisions in grouped.items():
-            results.append(
-                self.masker.mask_table(self.connector, schema, table, table_decisions)
+        if self.config.source_database.url or self.config.source_database.dialect:
+            if target_identity(self.config.source_database)["id"] == target_identity(
+                self.config.database
+            )["id"]:
+                raise ValueError("Source and target must be separate databases before masking")
+        if run_file is not None:
+            if decisions is not None or scan_report is not None:
+                raise ValueError("Use either run_file or decisions, not both")
+            record = RunRecord.load(run_file)
+            self.last_run_file = str(record.path)
+            record.require_approved()
+            self._check_run_scope(record)
+            scan = self._record_scan(record)
+        else:
+            scan = scan_report if scan_report is not None else (
+                self.scan() if decisions is None else ScanReport(decisions=decisions)
             )
+            record = self.create_run(scan=scan)
+        if scan.errors and not allow_partial:
+            raise ScanIncompleteError(
+                f"{len(scan.errors)} column(s) could not be analyzed; "
+                "unanalyzed columns would be silently left unmasked. "
+                "Errors:\n  - " + "\n  - ".join(scan.errors)
+            )
+
+        grouped: dict[tuple[str, str], list[Decision]] = {}
+        for d in self._record_scan(record).sensitive:
+            grouped.setdefault((d.schema, d.table), []).append(d)
+        # Fix every effective strategy before touching the first table.
+        dry_run = self.config.masking.dry_run
+        guard = (record.operation_lock() if dry_run else record.apply_guard(
+            self.config.audit.directory, reason=remask_reason,
+        ))
+        results: list[TableMaskResult] = []
+        with guard:
+            # All read/modify/write stages share the target lock. Refresh
+            # after acquiring it so a stale object cannot erase another run's
+            # committed progress.
+            record.data = RunRecord.load(record.path).data
+            if run_file is not None:
+                record.require_approved()
+                self._check_run_scope(record)
+            previous_execution = record.data["execution"]
+            execution: dict[str, Any] = {"status": "previewing" if dry_run else "applying", "tables": []}
+            if dry_run:
+                record.data.setdefault("previews", []).append(execution)
+            else:
+                record.data.setdefault("execution_history", []).append(previous_execution)
+                if previous_execution.get("repeat_overrides"):
+                    execution["repeat_overrides"] = previous_execution["repeat_overrides"]
+                record.data["execution"] = execution
+            record.save()  # persistence failure here must prevent all updates
+
+            def progress(phase: str, result: TableMaskResult, batch_rows: int) -> None:
+                tables = execution["tables"]
+                item = next((t for t in tables if (
+                    t["schema"], t["table"]
+                ) == (result.schema, result.table)), None)
+                if item is None:
+                    item = {"schema": result.schema, "table": result.table,
+                            "committed_batches": 0, "in_flight": False}
+                    tables.append(item)
+                item.update({
+                    "rows_scanned": result.rows_scanned, "rows_written": result.rows_written,
+                    "skipped_columns": [p.column for p in result.skipped_columns],
+                    "batch_rows": batch_rows, "phase": phase,
+                })
+                if phase == "before_batch":
+                    item["in_flight"] = True
+                elif phase == "after_batch":
+                    item["in_flight"] = False
+                    item["committed_batches"] += 1
+                record.save()
+
+            try:
+                execution["phase"] = "preflight"
+                for (schema, table), table_decisions in grouped.items():
+                    execution["active_table"] = {"schema": schema, "table": table,
+                                                 "columns": [d.column for d in table_decisions]}
+                    self.masker.preflight_table(self.connector, schema, table, table_decisions)
+                execution["phase"] = "masking"
+                for (schema, table), table_decisions in grouped.items():
+                    execution["active_table"] = {"schema": schema, "table": table,
+                                                 "columns": [d.column for d in table_decisions]}
+                    results.append(self.masker.mask_table(
+                        self.connector, schema, table, table_decisions, progress=progress,
+                    ))
+                execution["phase"] = "completed"
+                execution["status"] = "previewed" if dry_run else "applied"
+                execution["finished_at"] = datetime.now(timezone.utc).isoformat()
+                # Preview progress is separate from apply progress, including
+                # on disk: a failed preview cannot erase earlier commits.
+                record.save()
+            except BaseException as exc:
+                execution["status"] = "failed"
+                execution["error_type"] = type(exc).__name__
+                execution["finished_at"] = datetime.now(timezone.utc).isoformat()
+                # If audit storage itself failed, its last durable in_flight
+                # marker must remain: do not claim a rollback across stores.
+                try:
+                    record.save()
+                except OSError:
+                    pass
+                raise
         return results
 
     # -- validation -----------------------------------------------------------
@@ -224,7 +362,7 @@ class Runner:
             ))
         return issues
 
-    def validate(self) -> ValidationReport:
+    def validate(self, run_file: Optional[str] = None) -> ValidationReport:
         """Validate the masked (target) database against the source database.
 
         Requires ``source_database`` to be configured. Opens its own source
@@ -236,6 +374,9 @@ class Runner:
                 "(the original, pre-masking database)."
             )
 
+        if run_file is not None:
+            return self._validate_run(run_file)
+
         validator = Validator(self.config.validation)
         schemas = self.connector.list_schemas()
         # History belongs to the target's logical scope, even when the source
@@ -245,6 +386,7 @@ class Runner:
         )
         with SQLConnector(source_config) as source:
             sensitive = None
+            scan = ScanReport()
             coverage: list[ValidationIssue] = []
             if self.config.validation.check_masking_completeness:
                 pipeline = DetectionPipeline(
@@ -262,4 +404,98 @@ class Runner:
                 sensitive_columns=sensitive,
             )
         report.extend(coverage)
+        record = self.create_run(scan=scan)
+        record.data["validations"].append({
+            "status": "passed" if report.passed_strict else "failed",
+            "scope_origin": "original_source_scan_unreviewed",
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "summary": report.summary(), "passed": report.passed,
+            "passed_strict": report.passed_strict,
+            "issues": [self._audit_issue(i) for i in report.issues],
+        })
+        record.save()
         return report
+
+    def _validate_run(self, run_file: str) -> ValidationReport:
+        """Compare the original against every frozen sensitive column."""
+        record = RunRecord.load(run_file)
+        self.last_run_file = str(record.path)
+        with record.operation_lock():
+            record.data = RunRecord.load(record.path).data
+            return self._validate_record(record)
+
+    def _validate_record(self, record: RunRecord) -> ValidationReport:
+        attempt: dict[str, Any] = {"started_at": datetime.now(timezone.utc).isoformat(), "status": "running"}
+        record.data["validations"].append(attempt)
+        record.save()
+        try:
+            record.require_approved()
+            self._check_run_scope(record)
+            expected_source = record.data["plan"]["source"]
+            actual_source = target_identity(self.config.source_database)
+            if expected_source is None or expected_source["id"] != actual_source["id"]:
+                raise ValueError("Source identity differs from the frozen plan; review a new plan")
+            if actual_source["id"] == record.data["plan"]["target"]["id"]:
+                raise ValueError("Source and target must be separate databases")
+            scope = record.data["plan"]["scope"]
+            schemas = sorted({item["schema"] for item in scope})
+            scan = self._record_scan(record)
+            sensitive = [(d.schema, d.table, d.column) for d in scan.sensitive]
+            with SQLConnector(replace(self.config.source_database, schemas=schemas)) as source:
+                if inventory(source, schemas) != scope:
+                    raise ValueError("Source schema drift: original no longer matches the frozen scope")
+                report = Validator(self.config.validation).validate(
+                    source, self.connector, schemas=schemas, sensitive_columns=sensitive,
+                )
+            for issue in report.issues:
+                if (issue.check == "masking_completeness" and issue.status is Status.PASS
+                        and issue.detail.get("mode") == "overlap_heuristic"):
+                    issue.status = Status.WARNING
+                    issue.message += " Bounded overlap heuristics cannot verify every row."
+            report.extend(self._classification_coverage(scan, sensitive))
+            if record.data["execution"]["status"] != "applied":
+                report.add(ValidationIssue(
+                    check="run_execution", status=Status.ERROR,
+                    message="This run has no completed apply; inspect execution progress before release.",
+                ))
+            for name in ("check_row_counts", "check_schema_elements", "check_masking_completeness"):
+                if not getattr(self.config.validation, name):
+                    report.add(ValidationIssue(
+                        check="run_coverage", status=Status.ERROR,
+                        message=f"Frozen workflow requires {name}; this check was disabled.",
+                    ))
+            attempt.update({
+                "status": "passed" if report.passed_strict else "failed",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "summary": report.summary(), "passed": report.passed,
+                "passed_strict": report.passed_strict,
+                "sensitive_columns_expected": len(sensitive),
+                "sensitive_columns_checked": sum(
+                    i.check == "masking_completeness" and bool(i.column) for i in report.issues
+                ),
+                "issues": [self._audit_issue(i) for i in report.issues],
+            })
+            record.save()
+            return report
+        except BaseException as exc:
+            attempt.update({"status": "error", "error_type": type(exc).__name__,
+                            "finished_at": datetime.now(timezone.utc).isoformat()})
+            try:
+                record.save()
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def _audit_issue(issue: ValidationIssue) -> dict:
+        # Schema diffs may include SQL CHECK literals. Keep check location,
+        # outcome, counts, coverage and redacted row references only.
+        allowed = {"mode", "key", "rows_compared", "coverage", "source_rows_inspected",
+                   "target_rows_inspected", "source_only_keys", "target_only_keys",
+                   "unmasked_rows", "samples_redacted", "error_type", "element",
+                   "common_values", "common_values_checked", "comparable_columns",
+                   "classification_source", "columns_analyzed", "difference"}
+        item = issue.to_dict()
+        item["detail"] = {k: v for k, v in issue.detail.items() if k in allowed
+                          or (k in {"source", "target"} and isinstance(v, int))}
+        return item

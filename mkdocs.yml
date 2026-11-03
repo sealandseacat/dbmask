@@ -56,6 +56,7 @@ nav:
       - Mixed-format demo: issue36-demo.md
       - The seed map: seed-map.md
       - Validation: validation.md
+      - Confirmed plans and run records: run-records.md
       - LLM detection: llm.md
   - Concepts:
       - Architecture: architecture.md

@@ -83,6 +83,60 @@ def test_worker_rejects_unguarded_configuration_before_cli(tool, monkeypatch, tm
         tool.worker(["apply", str(config), str(tmp_path / "result.json")])
 
 
+@pytest.mark.parametrize("stage,command,flags", [
+    ("scan", "scan", ["--json"]),
+    ("dry-run", "mask", []),
+    ("apply", "mask", ["--apply"]),
+    ("validate", "validate", ["--strict", "--json"]),
+])
+def test_worker_forwards_the_same_frozen_run_to_actual_cli(tool, monkeypatch, tmp_path,
+                                                        stage, command, flags):
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump({"database": {"url": TARGET},
+                                     "source_database": {"url": SOURCE}}), encoding="utf-8")
+    run_file = tmp_path / "run-records" / "confirmed.json"
+    destination = tmp_path / (stage + ".json")
+    calls = []
+
+    def execute(arguments, log):
+        calls.append((arguments, log))
+        return {"exit_code": 0, "result": []}
+
+    monkeypatch.setattr(tool, "execute_cli", execute)
+    assert tool.worker([stage, str(config), str(destination), "--run-file", str(run_file)]) == 0
+    assert calls == [([command, "--config", str(config), "--run-file", str(run_file), *flags],
+                      destination.with_suffix(".log"))]
+    assert json.loads(destination.read_text(encoding="utf-8"))["exit_code"] == 0
+
+
+def test_run_stage_preserves_frozen_run_and_expected_refusal_exit(tool, monkeypatch, tmp_path):
+    config = tmp_path / "config.yaml"
+    run_file = tmp_path / "run-records" / "confirmed.json"
+    calls = []
+
+    def subprocess_run(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        assert arguments[-2:] == ["--run-file", str(run_file)]
+        assert arguments[2:5] == ["_worker", "apply", str(config)]
+        Path(arguments[5]).write_text(json.dumps({"exit_code": 1}), encoding="utf-8")
+        return SimpleNamespace(returncode=1, stdout="refused\n", stderr="")
+
+    monkeypatch.setattr(tool.subprocess, "run", subprocess_run)
+    payload = tool.run_stage("apply", config, tmp_path, "repeat-apply", expected_exit=1,
+                             run_file=run_file)
+    assert payload["exit_code"] == 1
+    assert calls[0][1] == {"capture_output": True, "text": True, "check": False}
+    assert (tmp_path / "repeat-apply-process.log").read_text(encoding="utf-8") == "refused\n"
+
+
+def test_generated_config_keeps_run_records_inside_visible_evidence_directory(tool, tmp_path):
+    path = tool.write_config(tmp_path, seed_map=False)
+    settings = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert settings["audit"]["directory"] == str(tmp_path / "run-records")
+    assert settings["validation"]["pk_row_limit"] is None
+    assert settings["history"]["enabled"] is False
+
+
 def test_real_cli_masks_and_fully_checks_more_than_5000_rows(tool, tmp_path):
     """Supplemental SQLite exercise; does not substitute for native PostgreSQL CI."""
     rows = 10001

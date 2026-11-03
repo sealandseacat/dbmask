@@ -10,7 +10,7 @@ Non-sensitive columns are passed through untouched.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -302,6 +302,7 @@ class MaskingEngine:
         key_columns: Optional[list[str]] = None,
         batch_size: int = 1000,
         preview_limit: int = 10,
+        progress: Optional[Callable[[str, TableMaskResult, int], None]] = None,
     ) -> TableMaskResult:
         decisions = list(decisions)
         plans = self.plan_table(decisions)
@@ -322,7 +323,11 @@ class MaskingEngine:
         result = TableMaskResult(
             schema=schema, table=table, columns=plans, skipped_columns=skipped
         )
+        if progress:
+            progress("started", result, 0)
         if not plans:
+            if progress:
+                progress("completed", result, 0)
             return result  # nothing maskable here
 
         def _process(row: dict) -> dict:
@@ -342,6 +347,8 @@ class MaskingEngine:
             # without a primary key, since nothing is written back).
             for row in connector.iter_rows(schema, table, batch_size=batch_size):
                 _process(row)
+            if progress:
+                progress("completed", result, 0)
             return result
 
         # Apply mode: read one page, then write it back, then read the next.
@@ -359,6 +366,15 @@ class MaskingEngine:
             for row in page:
                 masked = _process(row)
                 batch.append({column: masked[column] for column in update_columns})
+            # Save intent before UPDATE, then confirmed progress after its
+            # transaction returns. A crash between the stores is uncertain,
+            # never evidence that zero rows were committed.
+            if progress:
+                progress("before_batch", result, len(batch))
             result.rows_written += connector.update_rows(schema, table, keys, batch)
+            if progress:
+                progress("after_batch", result, len(batch))
 
+        if progress:
+            progress("completed", result, 0)
         return result

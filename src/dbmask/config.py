@@ -287,6 +287,21 @@ class ValidationConfig:
 
 
 @dataclass
+class AuditConfig:
+    """Local run records and the shared repeat-apply guard.
+
+    Keep this directory stable for a target. Moving/deleting its records also
+    removes the history used to detect repeat masking.
+    """
+
+    directory: str = ".dbmask/runs"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.directory, str) or not self.directory.strip():
+            raise ValueError("audit.directory must be a nonempty directory path")
+
+
+@dataclass
 class Config:
     # The MASKED database (the one produced by `mask`). Kept as `database` for
     # backwards compatibility with scan/mask.
@@ -298,6 +313,7 @@ class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     masking: MaskingConfig = field(default_factory=MaskingConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
+    audit: AuditConfig = field(default_factory=AuditConfig)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Config:
@@ -310,6 +326,7 @@ class Config:
             llm=LLMConfig(**(data.get("llm") or {})),
             masking=MaskingConfig(**(data.get("masking") or {})),
             validation=ValidationConfig(**(data.get("validation") or {})),
+            audit=AuditConfig(**(data.get("audit") or {})),
         )
 
 
@@ -321,6 +338,10 @@ class Config:
         with path.open("r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
         config = cls.from_dict(data)
+        audit_dir = Path(config.audit.directory).expanduser()
+        if not audit_dir.is_absolute():
+            audit_dir = path.resolve().parent / audit_dir
+        config.audit.directory = str(audit_dir.resolve())
         if config.history.source_file:
             source = Path(config.history.source_file).expanduser()
             if not source.is_absolute():

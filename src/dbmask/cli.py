@@ -22,6 +22,7 @@ from dbmask.detection.result import Sensitivity
 from dbmask.history.backend import history_backend
 from dbmask.history.file_store import FileHistoryStore
 from dbmask.history.records import HistoryValidationError
+from dbmask.run_record import RunRecord
 from dbmask.runner import Runner
 
 
@@ -81,7 +82,8 @@ def _warn_llm_data_egress(config: Config) -> None:
 @click.option("--config", "config_path", required=True, help="Path to config YAML.")
 @click.option("--json", "as_json", is_flag=True, help="Emit decisions as JSON.")
 @click.option("--output", type=click.Path(dir_okay=False), help="Export a review worksheet (.csv/.xlsx/.md).")
-def scan(config_path: str, as_json: bool, output: str) -> None:
+@click.option("--run-file", type=click.Path(dir_okay=False), help="Save the frozen draft plan here.")
+def scan(config_path: str, as_json: bool, output: str, run_file: str) -> None:
     """Classify every column as sensitive or not (no data is modified)."""
     config = _load(config_path)
     _warn_llm_data_egress(config)
@@ -89,6 +91,9 @@ def scan(config_path: str, as_json: bool, output: str) -> None:
         raise click.ClickException("Set detection.user_id before exporting a file-history review")
     with _runner(config) as runner:
         report = runner.scan()
+        record = runner.create_run(run_file, scan=report)
+        if not as_json:
+            click.echo(f"Run record: {record.path}", err=True)
         with_history = ({r.key: r for r in runner.history.records_for_review()}
                         if output and runner.history else {})
 
@@ -168,6 +173,43 @@ def scan(config_path: str, as_json: bool, output: str) -> None:
 
 @cli.command()
 @click.option("--config", "config_path", required=True, help="Path to config YAML.")
+@click.option("--run-file", type=click.Path(dir_okay=False),
+              help="New plan filename inside audit.directory (default: automatic name).")
+def plan(config_path: str, run_file: str) -> None:
+    """Scan and freeze a metadata-only plan for human confirmation."""
+    config = _load(config_path)
+    _warn_llm_data_egress(config)
+    with _runner(config) as runner:
+        scan_report = runner.scan()
+        record = runner.create_run(run_file, scan=scan_report)
+    click.echo(f"Draft run: {record.path}")
+    for d in record.data["plan"]["decisions"]:
+        click.echo(f"{d['schema']}.{d['table']}.{d['column']}: "
+                   f"{d['sensitivity']} -> {d['masking_strategy'] or '-'} "
+                   f"(source={d['source']}, review={d['review_status']})")
+    click.echo("Inspect the complete JSON scope and strategies before approve. "
+               "Resolve unknown columns through overrides/review and create a new plan.")
+    if scan_report.errors:
+        raise click.ClickException(
+            f"Draft saved with {len(scan_report.errors)} scan error(s); it cannot be approved"
+        )
+
+
+@cli.command()
+@click.option("--run-file", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--reviewed-by", required=True, help="Person confirming the entire frozen plan.")
+def approve(run_file: str, reviewed_by: str) -> None:
+    """Confirm a frozen plan; this does not modify the database or history."""
+    try:
+        record = RunRecord.load(run_file)
+        record.approve(reviewed_by)
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Approved run {record.data['run_id']}: {record.path}")
+
+
+@cli.command()
+@click.option("--config", "config_path", required=True, help="Path to config YAML.")
 @click.option("--apply", "apply", is_flag=True,
               help="Write masked values back. Without this flag it's a dry-run preview.")
 @click.option("--allow-partial", "allow_partial", is_flag=True,
@@ -178,7 +220,11 @@ def scan(config_path: str, as_json: bool, output: str) -> None:
               help="Show real original values in the preview. By default "
                    "originals are redacted so sensitive data does not end up "
                    "in terminals, scrollback, or CI logs.")
-def mask(config_path: str, apply: bool, allow_partial: bool, show_values: bool) -> None:
+@click.option("--run-file", type=click.Path(exists=True, dir_okay=False),
+              help="Use an approved frozen plan without reclassifying target values.")
+@click.option("--remask-reason", help="Explicitly override tracked repeat masking; record why.")
+def mask(config_path: str, apply: bool, allow_partial: bool, show_values: bool,
+         run_file: str, remask_reason: str) -> None:
     """Mask sensitive columns. Dry-run preview unless --apply is given."""
     config = _load(config_path)
     _warn_llm_data_egress(config)
@@ -198,27 +244,44 @@ def mask(config_path: str, apply: bool, allow_partial: bool, show_values: bool) 
     config.masking.dry_run = not apply
 
     with _runner(config) as runner:
-        report = runner.scan()
-        for err in report.errors:
-            click.echo(f"[error] scan: {err}", err=True)
-        if report.errors and not allow_partial:
-            click.echo(
-                f"\nAborting: {len(report.errors)} column(s) could not be "
-                "analyzed, and unanalyzed columns would be silently left "
-                "unmasked. Fix the errors above, or re-run with "
-                "--allow-partial to mask only what was scanned successfully.",
-                err=True,
-            )
-            sys.exit(2)
+        if run_file:
+            report = Runner._record_scan(RunRecord.load(run_file))
+        else:
+            report = runner.scan()
+            for err in report.errors:
+                click.echo(f"[error] scan: {err}", err=True)
+            if report.errors and not allow_partial:
+                record = runner.create_run(scan=report)
+                click.echo(f"Run record: {record.path}", err=True)
+                click.echo(
+                    f"\nAborting: {len(report.errors)} column(s) could not be "
+                    "analyzed, and unanalyzed columns would be silently left "
+                    "unmasked. Fix the errors above, or re-run with "
+                    "--allow-partial to mask only what was scanned successfully.",
+                    err=True,
+                )
+                sys.exit(2)
         from dbmask.masking.rules import MaskingValidationError
 
         try:
-            results = runner.mask(report.decisions)
+            results = runner.mask(
+                run_file=run_file, remask_reason=remask_reason,
+                scan_report=None if run_file else report, allow_partial=allow_partial,
+            )
         except MaskingValidationError as exc:
             raise click.ClickException(
                 f"Masking stopped: {exc}. Earlier committed batches may have changed; "
-                "review the error and restart from an untouched test copy."
+                f"inspect run record {runner.last_run_file} and restart from an untouched test copy."
             ) from exc
+        except Exception as exc:
+            # Driver errors can embed SQL parameters and source values.
+            if isinstance(exc, (ValueError, OSError)):
+                raise
+            raise click.ClickException(
+                f"Masking stopped ({type(exc).__name__}); inspect run record "
+                f"{runner.last_run_file}. Earlier batches may have committed."
+            ) from exc
+        click.echo(f"Run record: {runner.last_run_file}", err=True)
 
     mode = "APPLIED" if apply else "DRY-RUN (no changes written)"
     click.echo(f"=== Masking {mode} ===")
@@ -424,7 +487,9 @@ def strategies() -> None:
 @click.option("--strict", "strict", is_flag=True,
               help="Warnings and skipped checks also fail the run. Use in CI "
                    "when 'could not verify' must not pass the gate.")
-def validate(config_path: str, as_json: bool, strict: bool) -> None:
+@click.option("--run-file", type=click.Path(exists=True, dir_okay=False),
+              help="Validate every sensitive column in this approved frozen plan.")
+def validate(config_path: str, as_json: bool, strict: bool, run_file: str) -> None:
     """Validate the masked database against the original (source) database.
 
     Runs three checks: row counts, schema elements, and masking completeness.
@@ -432,7 +497,9 @@ def validate(config_path: str, as_json: bool, strict: bool) -> None:
     """
     config = _load(config_path)
     with _runner(config) as runner:
-        report = runner.validate()
+        report = runner.validate(run_file=run_file)
+        if not as_json:
+            click.echo(f"Run record: {runner.last_run_file}", err=True)
 
     passed = report.passed_strict if strict else report.passed
     summary = report.summary()

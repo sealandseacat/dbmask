@@ -245,6 +245,16 @@ columns, pending reviews and omitted sensitive columns fail strict mode even
 when `validation.columns` selects only part of the database. See
 [validation scope and limits](docs/validation.md).
 
+## Confirmed plans and run records
+
+Use `dbmask plan` → `dbmask approve` → `dbmask mask --run-file ... --apply`
+→ `dbmask validate --run-file ... --strict` to keep scanning, masking and
+validation tied to one confirmed column/strategy plan. Records retain review
+metadata, per-batch committed row counts, uncertain writes and validation
+coverage without raw values or connection secrets. Local repeat protection
+depends on retaining the shared audit directory. See the
+[complete workflow and recovery limits](docs/run-records.md).
+
 ## Supported databases
 
 The connector is a single SQLAlchemy code path, so PostgreSQL, MySQL/MariaDB,

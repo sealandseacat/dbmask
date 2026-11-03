@@ -95,6 +95,7 @@ def worker(arguments: list[str]) -> int:
     parser.add_argument("stage", choices=("scan", "dry-run", "apply", "validate"))
     parser.add_argument("config", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--run-file", type=Path)
     args = parser.parse_args(arguments)
     # Recheck the destination in every new process before invoking --apply.
     from dbmask.config import Config
@@ -103,6 +104,8 @@ def worker(arguments: list[str]) -> int:
     validate_urls(config.source_database.url, config.database.url)
     command = "mask" if args.stage in {"dry-run", "apply"} else args.stage
     cli_arguments = [command, "--config", str(args.config)]
+    if args.run_file is not None:
+        cli_arguments.extend(["--run-file", str(args.run_file)])
     if args.stage == "apply":
         cli_arguments.append("--apply")
     elif args.stage == "validate":
@@ -119,12 +122,14 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def run_stage(stage: str, config: Path, output: Path, name: str, expected_exit: int = 0) -> dict:
+def run_stage(stage: str, config: Path, output: Path, name: str, expected_exit: int = 0,
+              run_file: Path | None = None) -> dict:
     destination = output / (name + ".json")
-    result = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "_worker", stage,
-         str(config), str(destination)], capture_output=True, text=True, check=False,
-    )
+    command = [sys.executable, str(Path(__file__).resolve()), "_worker", stage,
+               str(config), str(destination)]
+    if run_file is not None:
+        command.extend(["--run-file", str(run_file)])
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
     # Save startup/import failures too, without treating them as expected refusals.
     (output / (name + "-process.log")).write_text(result.stdout + result.stderr, encoding="utf-8")
     require(destination.is_file(), f"{name}: CLI worker did not produce its result")
@@ -202,6 +207,7 @@ def write_config(output: Path, seed_map: bool) -> Path:
     fields_path = output / "fields.yaml"
     fields_path.write_text(yaml.safe_dump(fields, sort_keys=False), encoding="utf-8")
     config = {
+        "audit": {"directory": str(output / "run-records")},
         "database": {"url": "${DBMASK_CONTRACT_TARGET_URL}", "name": "contract-target", "schemas": ["public"]},
         "source_database": {"url": "${DBMASK_CONTRACT_SOURCE_URL}", "name": "contract-source", "schemas": ["public"]},
         "detection": {"overrides_file": str(fields_path), "use_patterns": False, "use_history": False},
@@ -290,7 +296,8 @@ def run_contract(args) -> int:
         require(snapshot(target) == baseline, "source and target fixtures do not initially match")
         report["initial_source"] = baseline
         phase = "scan"
-        scan = run_stage("scan", config, output, "scan")
+        run_file = output / "run-records" / "confirmed.json"
+        scan = run_stage("scan", config, output, "scan", run_file=run_file)
         require(isinstance(scan.get("result"), list) and bool(scan["result"]), "scan did not return decisions")
         expected_sensitive = {f"public.{table}.{column}" for table, columns in SENSITIVE.items() for column in columns}
         decisions = scan["result"]
@@ -305,15 +312,24 @@ def run_contract(args) -> int:
                 and all(d.get("sensitivity") in {"sensitive", "not_sensitive"} for d in decisions),
                 "scan did not classify the reviewed fixture exactly as intended")
         report["stages"][phase] = scan
+        # The synthetic fixture has an explicit, checked column policy. This
+        # is automation confirming the fixture, not a claimed human review.
+        from dbmask.run_record import RunRecord
+
+        frozen = RunRecord.load(run_file)
+        frozen.approve("synthetic-contract-fixture automation")
+        report["frozen_run"] = {"run_id": frozen.data["run_id"],
+                                "plan_sha256": frozen.data["plan_sha256"],
+                                "path": "run-records/confirmed.json"}
         phase = "dry-run"
-        dry = run_stage("dry-run", config, output, "dry-run")
+        dry = run_stage("dry-run", config, output, "dry-run", run_file=run_file)
         require(snapshot(source) == baseline and snapshot(target) == baseline, "dry-run changed a fixture")
         require(dry.get("tables") == {f"public.{table}": {"scanned": args.rows, "written": 0}
                                       for table in SENSITIVE}, "dry-run did not preview every row")
         require(mapping_count(output) == 0, "dry-run recorded a seed-map mapping")
         report["stages"][phase] = dry
         phase = "apply"
-        applied = run_stage("apply", config, output, "apply")
+        applied = run_stage("apply", config, output, "apply", run_file=run_file)
         require(applied.get("tables") == {f"public.{table}": {"scanned": args.rows, "written": args.rows}
                                           for table in SENSITIVE}, "apply did not report every row written")
         report["stages"][phase] = applied
@@ -324,7 +340,7 @@ def run_contract(args) -> int:
         report["independent_checks"] = assert_postconditions(source, target, args.rows, baseline)
         positive_target = snapshot(target)
         phase = "positive-strict"
-        positive = run_stage("validate", config, output, "positive-strict")
+        positive = run_stage("validate", config, output, "positive-strict", run_file=run_file)
         check_positive(positive.get("result", []), args.rows)
         report["stages"][phase] = positive
         phase = "bounded-coverage"
@@ -344,14 +360,24 @@ def run_contract(args) -> int:
         for case in CASES:
             phase = case
             with negative_control(target, case, args.rows):
-                negative = run_stage("validate", config, output, case, expected_exit=1)
+                negative = run_stage("validate", config, output, case, expected_exit=1, run_file=run_file)
                 check_negative(case, negative.get("result", []))
                 report["negative_controls"][case] = {"expected_refusal_confirmed": True, **negative}
             require(snapshot(target) == positive_target, f"{case}: the target was not restored")
             require(snapshot(source) == baseline, f"{case}: the source changed")
         phase = "final-strict"
-        final = run_stage("validate", config, output, "final-strict")
+        final = run_stage("validate", config, output, "final-strict", run_file=run_file)
         check_positive(final.get("result", []), args.rows)
+        frozen = RunRecord.load(run_file)
+        require(frozen.data["execution"]["status"] == "applied"
+                and sum(t["rows_written"] for t in frozen.data["execution"]["tables"]) == args.rows * 2
+                and frozen.data["validations"][-1]["passed_strict"],
+                "confirmed run did not retain full apply/validation evidence")
+        repeat = run_stage("apply", config, output, "repeat-apply", expected_exit=1, run_file=run_file)
+        require("already affected" in (output / "repeat-apply.log").read_text(encoding="utf-8"),
+                "repeat apply was refused for an unrelated reason")
+        require(snapshot(target) == positive_target, "refused repeat apply changed target data")
+        report["frozen_run"]["repeat_apply_refused"] = repeat["exit_code"] == 1
         report["stages"][phase] = final
         report["status"] = "passed"
         # Export only the untouched source and the fully restored positive target.

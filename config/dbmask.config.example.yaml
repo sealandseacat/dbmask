@@ -188,3 +188,10 @@ validation:
   columns: []
     # - public.customers.full_name
     # - public.customers.email
+
+# --- 8. Persistent run records and local repeat-apply protection ------------
+# Relative to this YAML file. When copied to config/dbmask.config.yaml, this
+# chooses .dbmask/runs at the repository root. Retain the directory per target.
+# See docs/run-records.md for the confirmed plan -> apply -> validate workflow.
+audit:
+  directory: ../.dbmask/runs

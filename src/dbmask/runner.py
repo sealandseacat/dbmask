@@ -1,6 +1,7 @@
 """High-level orchestration used by the CLI and as a library entry point."""
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,8 @@ from dbmask.masking.engine import MaskingEngine, TableMaskResult
 from dbmask.run_record import RunRecord, config_fingerprint, inventory, target_identity
 from dbmask.validation.result import Status, ValidationIssue, ValidationReport
 from dbmask.validation.validator import Validator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ScanIncompleteError(RuntimeError):
@@ -287,8 +290,14 @@ class Runner:
                 # marker must remain: do not claim a rollback across stores.
                 try:
                     record.save()
-                except OSError:
-                    pass
+                except OSError as audit_error:
+                    # Failure recording is best effort. Preserve the original
+                    # error without logging values from its chained traceback.
+                    _LOGGER.warning(
+                        "Could not save failed execution status (%s); "
+                        "preserving the original error and last saved checkpoint.",
+                        type(audit_error).__name__,
+                    )
                 raise
         return results
 

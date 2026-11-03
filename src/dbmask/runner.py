@@ -483,6 +483,8 @@ class Runner:
             try:
                 record.save()
             except OSError:
+                # Best-effort audit persistence: never hide the original failure
+                # with a secondary filesystem/storage write error.
                 pass
             raise
 

@@ -2,7 +2,9 @@
 
 The PostgreSQL contract creates matching synthetic source and target databases,
 runs the public scan → preview → apply → strict-validation CLI, and independently
-checks the observed database contents. Every run starts from new databases.
+checks the observed database contents. The apply also exercises resumable
+masking with PostgreSQL connections terminated on either side of a batch
+commit. Every run starts from new databases.
 No production data, external LLM or downloaded dataset is needed.
 
 The existing [three-row Ota workflow](https://github.com/sealandseacat/dbmask/actions/runs/40892527475)
@@ -63,6 +65,7 @@ Paths below are relative to the extracted Actions artifact:
 | --- | --- |
 | `commit.txt` | The checked-out Git commit. |
 | `run/report.json` | Contract checks, environment, coverage and stage results. |
+| `run/run-records/confirmed.json` | Approved plan, interruption history, resumed row totals and strict validation. |
 | `run/review/index.html` | Before/after samples aligned by primary key. |
 | `run/review/manifest.json` | Exported row counts, primary keys, file SHA-256 hashes and CSV conventions. |
 | `run/review/csv/customers.before.csv` | All synthetic source customer rows. |
@@ -71,6 +74,12 @@ Paths below are relative to the extracted Actions artifact:
 | `run/review/csv/orders.after.csv` | All final masked order rows. |
 | `run/review/source.dump` | Optional custom-format archive of the synthetic source database. |
 | `run/review/masked.dump` | Optional custom-format archive of the final masked database. |
+
+In `run/report.json`, `frozen_run.resume` records the recovered boundary and
+whether committed rows stayed unchanged. The 200,001-row case resumes the
+orders table after its first 120,000 rows and skips the completed customers
+table. Both intentional disconnect stages are expected to exit with an error
+before the successful apply and final strict validation.
 
 The HTML displays a limited sample, while all four CSVs contain the complete
 tables. Compare customers by `id` and orders by `(tenant_id, order_id)`, as

@@ -404,6 +404,38 @@ def test_partial_failure_keeps_committed_rows_and_uncertain_batch(run_env, monke
     assert emails[1000] == "person1001@example.com"
     with Runner(config) as runner, pytest.raises(ValueError):
         runner.mask(run_file=str(path))
+    with Runner(config) as runner, pytest.raises(ValueError, match="no safe resume point"):
+        runner.mask(run_file=str(path), resume=True)
+    assert _emails(run_env.target) == emails
+
+
+@pytest.mark.parametrize("options", [
+    ["--resume"],
+    ["--apply", "--resume", "--resumable"],
+    ["--apply", "--resume", "--remask-reason", "restored the target"],
+])
+def test_resume_flags_require_explicit_apply_without_conflicting_modes(run_env, options):
+    path = run_env.plan()
+    config_path = run_env.tmp / "config.yaml"
+    config_path.write_text(yaml.safe_dump(run_env.settings), encoding="utf-8")
+    before = _emails(run_env.target)
+    result = CliRunner().invoke(cli, ["mask", "--config", str(config_path),
+                                     "--run-file", str(path), *options])
+    assert result.exit_code == 2
+    assert "Use either --resumable or --resume with --apply and --run-file" in result.output
+    assert _emails(run_env.target) == before
+    assert RunRecord.load(path).data["execution"]["status"] == "planned"
+
+
+def test_resumable_apply_refuses_unsupported_database_before_writes(run_env):
+    path = run_env.plan()
+    before = _emails(run_env.target)
+    config = run_env.config()
+    config.masking.dry_run = False
+    with Runner(config) as runner, pytest.raises(ValueError, match="requires a PostgreSQL target"):
+        runner.mask(run_file=str(path), resumable=True)
+    assert _emails(run_env.target) == before
+    assert RunRecord.load(path).data["execution"]["status"] == "planned"
 
 
 def test_cli_plan_and_approval_are_reviewable_without_database_writes(run_env):

@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from dbmask.config import MaskingConfig
 from dbmask.connectors.base import Connector
@@ -26,6 +26,9 @@ from dbmask.masking.rules import (
     get_strategy,
 )
 from dbmask.masking.seed_store import DEFAULT_SEED_MAP_URL, SeedStore
+
+if TYPE_CHECKING:
+    from dbmask.connectors.postgres_checkpoint import PostgresCheckpoint
 
 
 @dataclass
@@ -303,6 +306,8 @@ class MaskingEngine:
         batch_size: int = 1000,
         preview_limit: int = 10,
         progress: Optional[Callable[[str, TableMaskResult, int], None]] = None,
+        *,
+        checkpoint: Optional[PostgresCheckpoint] = None,
     ) -> TableMaskResult:
         decisions = list(decisions)
         plans = self.plan_table(decisions)
@@ -323,6 +328,8 @@ class MaskingEngine:
         result = TableMaskResult(
             schema=schema, table=table, columns=plans, skipped_columns=skipped
         )
+        if checkpoint is not None and plans:
+            result.rows_scanned = result.rows_written = checkpoint.tables[(schema, table)].rows_written
         if progress:
             progress("started", result, 0)
         if not plans:
@@ -359,19 +366,22 @@ class MaskingEngine:
         # Only selected masking columns belong in SET. Unselected fields may
         # be computed/read-only or have UPDATE-specific side effects.
         update_columns = list(dict.fromkeys([*keys, *(p.column for p in plans)]))
-        for page in connector.iter_pages(
-            schema, table, key_columns=keys, batch_size=batch_size
-        ):
+        if checkpoint is None:
+            pages = connector.iter_pages(schema, table, key_columns=keys, batch_size=batch_size)
+            update_rows = connector.update_rows
+        else:
+            pages = checkpoint.iter_pages(schema, table, keys, batch_size)
+            update_rows = checkpoint.update_rows
+        for page in pages:
             batch = []
             for row in page:
                 masked = _process(row)
                 batch.append({column: masked[column] for column in update_columns})
-            # Save intent before UPDATE, then confirmed progress after its
-            # transaction returns. A crash between the stores is uncertain,
-            # never evidence that zero rows were committed.
+            # The local audit may lag a successful commit. In resumable mode
+            # update_rows also commits the authoritative database checkpoint.
             if progress:
                 progress("before_batch", result, len(batch))
-            result.rows_written += connector.update_rows(schema, table, keys, batch)
+            result.rows_written += update_rows(schema, table, keys, batch)
             if progress:
                 progress("after_batch", result, len(batch))
 

@@ -18,11 +18,13 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import sqlalchemy
 import yaml
 from _postgres_contract_fixture import (
     KEEP,
+    ORDER,
     SENSITIVE,
     assert_postconditions,
     negative_control,
@@ -32,7 +34,7 @@ from _postgres_contract_fixture import (
     validate_urls,
 )
 from _postgres_contract_review import ReviewExportError, export_review_bundle
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 
 SOURCE_ENV = "DBMASK_CONTRACT_SOURCE_URL"
 TARGET_ENV = "DBMASK_CONTRACT_TARGET_URL"
@@ -92,29 +94,66 @@ def execute_cli(arguments: list[str], log: Path) -> dict:
 
 def worker(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("stage", choices=("scan", "dry-run", "apply", "validate"))
+    parser.add_argument("stage", choices=("scan", "dry-run", "apply", "resume", "validate"))
     parser.add_argument("config", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--run-file", type=Path)
+    parser.add_argument("--disconnect-at", type=int)
     args = parser.parse_args(arguments)
     # Recheck the destination in every new process before invoking --apply.
     from dbmask.config import Config
 
     config = Config.load(args.config)
     validate_urls(config.source_database.url, config.database.url)
-    command = "mask" if args.stage in {"dry-run", "apply"} else args.stage
+    command = "mask" if args.stage in {"dry-run", "apply", "resume"} else args.stage
     cli_arguments = [command, "--config", str(args.config)]
     if args.run_file is not None:
         cli_arguments.extend(["--run-file", str(args.run_file)])
-    if args.stage == "apply":
+    if args.stage in {"apply", "resume"}:
         cli_arguments.append("--apply")
+        if args.stage == "resume":
+            cli_arguments.append("--resume")
+        elif args.disconnect_at is not None:
+            cli_arguments.append("--resumable")
     elif args.stage == "validate":
         cli_arguments.extend(["--strict", "--json"])
     elif args.stage == "scan":
         cli_arguments.append("--json")
-    payload = execute_cli(cli_arguments, args.output.with_suffix(".log"))
+    log = args.output.with_suffix(".log")
+    if args.disconnect_at is None:
+        payload = execute_cli(cli_arguments, log)
+    else:
+        require(args.stage in {"apply", "resume"} and args.run_file is not None,
+                "a disconnect test requires an apply or resume with a frozen plan")
+        payload = disconnect_during_batch(cli_arguments, log, args.disconnect_at,
+                                          after_commit=args.stage == "resume")
     write_json(args.output, payload)
     return payload["exit_code"]
+
+
+def disconnect_during_batch(arguments: list[str], log: Path, stop_at: int, *, after_commit: bool) -> dict:
+    """Terminate only the disposable worker's backend, before or just after COMMIT."""
+    from dbmask.connectors.postgres_checkpoint import PostgresCheckpoint
+
+    def disconnect(connection) -> None:
+        connection.exec_driver_sql("SELECT pg_terminate_backend(pg_backend_pid())")
+
+    update = PostgresCheckpoint.update_rows
+
+    def interrupt(checkpoint, schema, table, keys, rows):
+        state = checkpoint.tables[(schema, table)]
+        if table != "orders" or state.rows_written + len(rows) != stop_at:
+            return update(checkpoint, schema, table, keys, rows)
+        if not after_commit:
+            event.listen(checkpoint.connection, "commit", disconnect, once=True)
+        written = update(checkpoint, schema, table, keys, rows)
+        if after_commit:
+            # PostgreSQL committed, but the CLI has yet to save its local ack.
+            disconnect(checkpoint.connection)
+        return written
+
+    with patch.object(PostgresCheckpoint, "update_rows", interrupt):
+        return execute_cli(arguments, log)
 
 
 def require(condition: bool, message: str) -> None:
@@ -123,12 +162,14 @@ def require(condition: bool, message: str) -> None:
 
 
 def run_stage(stage: str, config: Path, output: Path, name: str, expected_exit: int = 0,
-              run_file: Path | None = None) -> dict:
+              run_file: Path | None = None, *, disconnect_at: int | None = None) -> dict:
     destination = output / (name + ".json")
     command = [sys.executable, str(Path(__file__).resolve()), "_worker", stage,
                str(config), str(destination)]
     if run_file is not None:
         command.extend(["--run-file", str(run_file)])
+    if disconnect_at is not None:
+        command.extend(["--disconnect-at", str(disconnect_at)])
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     # Save startup/import failures too, without treating them as expected refusals.
     (output / (name + "-process.log")).write_text(result.stdout + result.stderr, encoding="utf-8")
@@ -138,6 +179,46 @@ def run_stage(stage: str, config: Path, output: Path, name: str, expected_exit: 
             f"{name}: CLI returned an unexpected exit code")
     require(not payload.get("json_parse_failed"), f"{name}: CLI output is not valid JSON")
     return payload
+
+
+def committed_versions(target: str, orders_prefix: int) -> dict[str, str]:
+    """Fingerprint row versions so even an identical second UPDATE fails the test."""
+    engine = create_engine(target)
+    try:
+        with engine.connect() as connection:
+            return {
+                table: connection.execute(text(f"""
+                    SELECT encode(sha256(convert_to(string_agg(version, ',' ORDER BY {order}), 'UTF8')), 'hex') FROM (
+                        SELECT {order}, xmin::text AS version FROM public.{table}
+                        ORDER BY {order} LIMIT :prefix
+                    ) AS committed
+                """), {"prefix": orders_prefix if table == "orders" else None}).scalar_one()
+                for table, order in ORDER.items()
+            }
+    finally:
+        engine.dispose()
+
+
+def check_disconnected_batch(output: Path, stage: str, run_file: Path, target: str,
+                             local_rows: int, committed_rows: int) -> None:
+    from dbmask.run_record import RunRecord
+
+    require("Masking stopped (OperationalError)" in (output / (stage + ".log")).read_text(encoding="utf-8"),
+            f"{stage}: expected a terminated PostgreSQL connection")
+    execution = RunRecord.load(run_file).data["execution"]
+    tables = {item["table"]: item for item in execution["tables"]}
+    require(execution["status"] == "failed" and tables["orders"]["in_flight"]
+            and tables["orders"]["rows_written"] == local_rows,
+            f"{stage}: local audit did not retain the uncertain orders batch")
+    engine = create_engine(target)
+    try:
+        with engine.connect() as connection:
+            actual = connection.execute(text(
+                "SELECT count(*) FROM public.orders WHERE contact_email LIKE '%@example.invalid'"
+            )).scalar_one()
+            require(actual == committed_rows, f"{stage}: target did not retain the expected committed rows")
+    finally:
+        engine.dispose()
 
 
 def check_positive(issues: list[dict], rows: int) -> None:
@@ -280,7 +361,7 @@ def run_contract(args) -> int:
               "review_artifacts": {"status": "not_created", "dumps_requested": args.include_dumps},
               "stages": {}, "negative_controls": {}, "limitations": [
                   "Only this synthetic fixture, selected types, engine/version and configuration are exercised.",
-                  "No detection accuracy benchmark, sensitive-key rewriting, release-wheel gate or resume guarantee.",
+                  "No detection accuracy benchmark, sensitive-key rewriting or release-wheel gate.",
               ]}
     phase = "seed"
     started = time.perf_counter()
@@ -328,8 +409,35 @@ def run_contract(args) -> int:
                                       for table in SENSITIVE}, "dry-run did not preview every row")
         require(mapping_count(output) == 0, "dry-run recorded a seed-map mapping")
         report["stages"][phase] = dry
+        # Exercise a late interruption on the large fixture.
+        stop_at = 120_000 if args.rows > 120_000 else 2_000
+        prior_prefix = stop_at - 1_000
+        phase = "disconnect-before-commit"
+        report["stages"][phase] = run_stage("apply", config, output, phase, expected_exit=1,
+                                           run_file=run_file, disconnect_at=stop_at)
+        check_disconnected_batch(output, phase, run_file, target, prior_prefix, prior_prefix)
+        first_versions = committed_versions(target, prior_prefix)
+        phase = "disconnect-after-commit"
+        report["stages"][phase] = run_stage("resume", config, output, phase, expected_exit=1,
+                                           run_file=run_file, disconnect_at=stop_at)
+        check_disconnected_batch(output, phase, run_file, target, prior_prefix, stop_at)
+        require(committed_versions(target, prior_prefix) == first_versions,
+                "resume after rollback rewrote committed rows")
+        second_versions = committed_versions(target, stop_at)
         phase = "apply"
-        applied = run_stage("apply", config, output, "apply", run_file=run_file)
+        applied = run_stage("resume", config, output, phase, run_file=run_file)
+        require(committed_versions(target, stop_at) == second_versions,
+                "resume after a committed batch rewrote committed rows")
+        resumed = RunRecord.load(run_file).data["execution"]
+        resumed_from = {item["table"]: item["resumed_from_rows"] for item in resumed["tables"]}
+        require(resumed_from == {"customers": args.rows, "orders": stop_at},
+                "resume did not recover the actual PostgreSQL commit boundary")
+        report["frozen_run"]["resume"] = {
+            "orders_rows_before_failed_commit": prior_prefix,
+            "orders_rows_resumed_from": stop_at,
+            "customers_rows_resumed_from": args.rows,
+            "committed_rows_unchanged": True,
+        }
         require(applied.get("tables") == {f"public.{table}": {"scanned": args.rows, "written": args.rows}
                                           for table in SENSITIVE}, "apply did not report every row written")
         report["stages"][phase] = applied

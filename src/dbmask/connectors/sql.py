@@ -8,6 +8,7 @@ per-database SQL required.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import nullcontext
 from typing import Optional
 
 from sqlalchemy import (
@@ -20,7 +21,7 @@ from sqlalchemy import (
     or_,
     select,
 )
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from dbmask.config import DatabaseConfig
 from dbmask.connectors.base import Connector
@@ -168,6 +169,8 @@ class SQLConnector(Connector):
         key_columns: list[str],
         columns: Optional[list[str]] = None,
         batch_size: int = 1000,
+        *,
+        skip_rows: int = 0,
     ) -> Iterable[list[dict]]:
         """Read the table in key-ordered pages (keyset pagination).
 
@@ -184,6 +187,8 @@ class SQLConnector(Connector):
         scan stays correct while non-key columns are being updated between
         pages. Key columns are assumed non-NULL and immutable during the run —
         true for primary keys, which is what the engine passes in.
+        A checkpoint can skip a known committed prefix with one OFFSET on
+        the first page. Subsequent pages still use keyset pagination.
         """
         if not key_columns:
             raise ValueError(
@@ -205,6 +210,8 @@ class SQLConnector(Connector):
             stmt = select(*cols).order_by(*key_cols).limit(batch_size)
             if last is not None:
                 stmt = stmt.where(self._keyset_after(key_cols, last))
+            elif skip_rows:
+                stmt = stmt.offset(skip_rows)
             with engine.connect() as conn:
                 page = [dict(r._mapping) for r in conn.execute(stmt).fetchall()]
             if not page:
@@ -230,8 +237,10 @@ class SQLConnector(Connector):
         return or_(*clauses)
 
     def update_rows(
-        self, schema: str, table: str, key_columns: list[str], rows: list[dict]
+        self, schema: str, table: str, key_columns: list[str], rows: list[dict],
+        *, connection: Optional[Connection] = None,
     ) -> int:
+        """Update one page, optionally inside the caller's target transaction."""
         if not rows:
             return 0
         if not key_columns:
@@ -264,7 +273,10 @@ class SQLConnector(Connector):
             )
         affected = 0
         engine = self._require_engine()
-        with engine.begin() as conn:
+        if connection is not None and (connection.engine is not engine or not connection.in_transaction()):
+            raise ValueError("Updates require an active transaction on the target engine")
+        transaction = engine.begin() if connection is None else nullcontext(connection)
+        with transaction as conn:
             for row in rows:
                 where = and_(*[tbl.c[k] == row[k] for k in key_columns])
                 values = {k: v for k, v in row.items() if k not in key_columns}

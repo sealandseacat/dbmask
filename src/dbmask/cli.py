@@ -222,10 +222,17 @@ def approve(run_file: str, reviewed_by: str) -> None:
                    "in terminals, scrollback, or CI logs.")
 @click.option("--run-file", type=click.Path(exists=True, dir_okay=False),
               help="Use an approved frozen plan without reclassifying target values.")
+@click.option("--resumable", is_flag=True,
+              help="Start an apply with transactional checkpoints on a PostgreSQL target.")
+@click.option("--resume", is_flag=True,
+              help="Continue a resumable apply with the same approved run file.")
 @click.option("--remask-reason", help="Explicitly override tracked repeat masking; record why.")
 def mask(config_path: str, apply: bool, allow_partial: bool, show_values: bool,
-         run_file: str, remask_reason: str) -> None:
+         run_file: str, remask_reason: str, resumable: bool, resume: bool) -> None:
     """Mask sensitive columns. Dry-run preview unless --apply is given."""
+    if (resumable or resume) and (not apply or not run_file or remask_reason is not None
+                                  or (resumable and resume)):
+        raise click.UsageError("Use either --resumable or --resume with --apply and --run-file, without --remask-reason")
     config = _load(config_path)
     _warn_llm_data_egress(config)
     if config.masking.seed == "dbmask":
@@ -267,6 +274,7 @@ def mask(config_path: str, apply: bool, allow_partial: bool, show_values: bool,
             results = runner.mask(
                 run_file=run_file, remask_reason=remask_reason,
                 scan_report=None if run_file else report, allow_partial=allow_partial,
+                resumable=resumable, resume=resume,
             )
         except MaskingValidationError as exc:
             raise click.ClickException(
@@ -277,14 +285,18 @@ def mask(config_path: str, apply: bool, allow_partial: bool, show_values: bool,
             # Driver errors can embed SQL parameters and source values.
             if isinstance(exc, (ValueError, OSError)):
                 raise
+            hint = (" When the target is available, use --apply --resume with the same --run-file."
+                    if resumable or resume else "")
             raise click.ClickException(
                 f"Masking stopped ({type(exc).__name__}); inspect run record "
-                f"{runner.last_run_file}. Earlier batches may have committed."
+                f"{runner.last_run_file}. Earlier batches may have committed.{hint}"
             ) from exc
         click.echo(f"Run record: {runner.last_run_file}", err=True)
 
     mode = "APPLIED" if apply else "DRY-RUN (no changes written)"
     click.echo(f"=== Masking {mode} ===")
+    if resume:
+        click.echo("Resumed from the PostgreSQL checkpoint. Totals include previously committed rows.")
     previewed = False
     for res in results:
         click.echo(f"\n{res.schema}.{res.table}  "

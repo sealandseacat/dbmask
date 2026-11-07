@@ -112,7 +112,8 @@ warn_redundant_casts = true
 warn_unused_ignores = false  # ignores differ between local/CI stub sets
 no_implicit_optional = true
 [[tool.mypy.overrides]]
-module = ["click.*"]
+# Optional SDK dependencies may use syntax newer than dbmask's Python floor.
+module = ["click.*", "openai.*"]
 follow_imports = "skip"
 
 [tool.pytest.ini_options]

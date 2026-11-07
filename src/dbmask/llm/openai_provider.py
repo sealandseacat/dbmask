@@ -38,7 +38,7 @@ class OpenAIProvider(LLMProvider):
             import tiktoken
 
             try:
-                self._encoding = tiktoken.encoding_for_model(model)
+                self._encoding: Optional[tiktoken.Encoding] = tiktoken.encoding_for_model(model)
             except KeyError:
                 self._encoding = tiktoken.get_encoding("cl100k_base")
         except ImportError:  # pragma: no cover

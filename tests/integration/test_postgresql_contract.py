@@ -34,6 +34,12 @@ def test_generated_postgresql_contract(tmp_path):
     assert report["independent_checks"]["rows_compared_per_table"] == {
         "customers": 10001, "orders": 10001,
     }
+    assert report["frozen_run"]["resume"] == {
+        "orders_rows_before_failed_commit": 1000,
+        "orders_rows_resumed_from": 2000,
+        "customers_rows_resumed_from": 10001,
+        "committed_rows_unchanged": True,
+    }
     assert set(report["negative_controls"]) == {
         "restore_email_5001", "restore_email_last", "missing_order", "replace_order_key", "drop_unique",
     }

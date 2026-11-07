@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any, Optional
 
 from dbmask.config import Config
 from dbmask.connectors.base import Connector
+from dbmask.connectors.postgres_checkpoint import PostgresCheckpoint
 from dbmask.connectors.sql import SQLConnector
 from dbmask.detection.overrides import FieldOverrides
 from dbmask.detection.pipeline import DetectionPipeline, TokenBudgetExceeded
@@ -182,13 +184,21 @@ class Runner:
         run_file: Optional[str] = None,
         remask_reason: Optional[str] = None,
         scan_report: Optional[ScanReport] = None,
+        resumable: bool = False,
+        resume: bool = False,
     ) -> list[TableMaskResult]:
         """Mask from a frozen plan, recording every committed page.
 
         Supplying ``run_file`` requires explicit plan approval. Legacy callers
         remain supported and get an automatic, unreviewed run record. The
         shared audit directory must be retained for repeat masking detection.
+        PostgreSQL applies can opt into target-side checkpoints with
+        ``resumable=True`` and continue the same run with ``resume=True``.
         """
+        dry_run = self.config.masking.dry_run
+        if resumable or resume:
+            if dry_run or run_file is None or remask_reason is not None or (resumable and resume):
+                raise ValueError("Use either --resumable or --resume with --apply and --run-file, without --remask-reason")
         if self.config.source_database.url or self.config.source_database.dialect:
             if target_identity(self.config.source_database)["id"] == target_identity(
                 self.config.database
@@ -214,16 +224,11 @@ class Runner:
                 "Errors:\n  - " + "\n  - ".join(scan.errors)
             )
 
-        grouped: dict[tuple[str, str], list[Decision]] = {}
-        for d in self._record_scan(record).sensitive:
-            grouped.setdefault((d.schema, d.table), []).append(d)
-        # Fix every effective strategy before touching the first table.
-        dry_run = self.config.masking.dry_run
         guard = (record.operation_lock() if dry_run else record.apply_guard(
-            self.config.audit.directory, reason=remask_reason,
+            self.config.audit.directory, reason=remask_reason, resume=resume,
         ))
         results: list[TableMaskResult] = []
-        with guard:
+        with guard, ExitStack() as resources:
             # All read/modify/write stages share the target lock. Refresh
             # after acquiring it so a stale object cannot erase another run's
             # committed progress.
@@ -231,8 +236,36 @@ class Runner:
             if run_file is not None:
                 record.require_approved()
                 self._check_run_scope(record)
+            grouped: dict[tuple[str, str], list[Decision]] = {}
+            for d in self._record_scan(record).sensitive:
+                grouped.setdefault((d.schema, d.table), []).append(d)
             previous_execution = record.data["execution"]
+            if resume and previous_execution["status"] == "applied":
+                raise ValueError("This run already completed masking; run validation next")
+            checkpoint = None
+            if resumable or resume:
+                checkpoint = resources.enter_context(PostgresCheckpoint.open(
+                    self.connector, record.data["run_id"], record.data["plan_sha256"],
+                    self._checkpoint_tables(record, grouped), resume=resume,
+                ))
+                if resume:
+                    for item in previous_execution["tables"]:
+                        saved = checkpoint.tables.get((item["schema"], item["table"]))
+                        if saved is not None and (saved.rows_written < item["rows_written"]
+                                                  or saved.committed_batches < item["committed_batches"]):
+                            raise ValueError("PostgreSQL checkpoint is older than confirmed local progress; cannot resume")
             execution: dict[str, Any] = {"status": "previewing" if dry_run else "applying", "tables": []}
+            if checkpoint is not None:
+                execution["resumable"] = True
+                if resume:
+                    execution["resumed_at"] = datetime.now(timezone.utc).isoformat()
+                for item in checkpoint.tables.values():
+                    table_progress = {**asdict(item), "rows_scanned": item.rows_written,
+                                      "in_flight": False}
+                    if resume:
+                        table_progress["resumed_from_rows"] = item.rows_written
+                        table_progress["resumed_from_batches"] = item.committed_batches
+                    execution["tables"].append(table_progress)
             if dry_run:
                 record.data.setdefault("previews", []).append(execution)
             else:
@@ -275,7 +308,10 @@ class Runner:
                                                  "columns": [d.column for d in table_decisions]}
                     results.append(self.masker.mask_table(
                         self.connector, schema, table, table_decisions, progress=progress,
+                        checkpoint=checkpoint,
                     ))
+                if checkpoint is not None:
+                    checkpoint.require_complete()
                 execution["phase"] = "completed"
                 execution["status"] = "previewed" if dry_run else "applied"
                 execution["finished_at"] = datetime.now(timezone.utc).isoformat()
@@ -300,6 +336,21 @@ class Runner:
                     )
                 raise
         return results
+
+    @staticmethod
+    def _checkpoint_tables(
+        record: RunRecord, grouped: dict[tuple[str, str], list[Decision]],
+    ) -> list[tuple[str, str]]:
+        """Find writable tables and reject keyless applies before any writes."""
+        scope = {(item["schema"], item["table"]): item for item in record.data["plan"]["scope"]}
+        tables = []
+        for key, decisions in grouped.items():
+            keys = {column.lower() for column in scope[key]["primary_key"]}
+            if not keys:
+                raise ValueError(f"Resumable masking requires a primary key on {'.'.join(key)}")
+            if any(d.column.lower() not in keys for d in decisions):
+                tables.append(key)
+        return tables
 
     # -- validation -----------------------------------------------------------
     def _sensitive_columns(self, scan: ScanReport) -> list[tuple[str, str, str]]:

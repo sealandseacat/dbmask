@@ -87,6 +87,7 @@ def test_worker_rejects_unguarded_configuration_before_cli(tool, monkeypatch, tm
     ("scan", "scan", ["--json"]),
     ("dry-run", "mask", []),
     ("apply", "mask", ["--apply"]),
+    ("resume", "mask", ["--apply", "--resume"]),
     ("validate", "validate", ["--strict", "--json"]),
 ])
 def test_worker_forwards_the_same_frozen_run_to_actual_cli(tool, monkeypatch, tmp_path,

@@ -92,6 +92,7 @@ and the keyless-table heuristic.
 | `plan.decisions` | Classifications, review metadata and resolved strategies |
 | `plan_sha256`, `approval` | Frozen-plan integrity digest and person confirming it |
 | `execution.tables` | Scanned/written row counts, committed batches, skipped columns and in-flight state |
+| `execution.tables[*].resumed_from_rows` | Rows already committed at the start of a PostgreSQL resume |
 | `previews`, `execution_history` | Preview attempts and preceding apply attempts |
 | `validations` | Coverage, check outcomes, failures and redacted row references |
 
@@ -109,9 +110,8 @@ copying database exception text or query parameters into the record.
 
 Target commits and audit-file writes are separate operations. A crash or an
 audit-write failure can therefore leave `in_flight: true` even when the batch
-committed. Treat that state as uncertain. Inspect the run and restore a fresh
-untouched target copy before retrying; this feature is not automatic resume
-or a rollback of previously committed batches.
+committed. For applies started without a database checkpoint, inspect that
+state and restore an untouched target copy before reapplying.
 
 The local guard refuses another apply whose sensitive-column scope overlaps
 a tracked completed, partial or uncertain write to the same target. It also
@@ -124,6 +124,52 @@ Protection depends on retaining the audit records in the same directory. It
 does not discover writes made elsewhere, recognize every host/connection
 alias, coordinate separate machines, or survive deletion of the evidence.
 Direct calls to `MaskingEngine` are outside Runner's run-record workflow.
+
+## Resume a PostgreSQL apply
+
+Use an approved plan for a disposable, stable PostgreSQL target. Set
+`database.schemas` explicitly (for example, `[public]`) before planning and
+keep `dbmask_internal` outside that list. The masking role needs access to
+create and write `dbmask_internal.mask_runs_v1` on the target. An administrator
+can pre-create the dedicated schema and grant the role `USAGE` and `CREATE`
+there. Use a direct PostgreSQL connection or a pooler in session mode.
+
+Keep the same target copy, configuration, seed map, audit directory and
+approved run file for the entire operation. Keep the target exclusive to
+this run, including between attempts, with stable primary keys and rows.
+Resuming checks table row counts and the frozen schema. Changes that preserve
+row counts can still invalidate the ordered prefix. Plan to verify the whole
+target against the untouched source before using it.
+
+```bash
+# First apply on the clean target copy
+dbmask mask --config config/dbmask.config.yaml --run-file .dbmask/runs/trial-001.json --apply --resumable
+
+# After a disconnect, once the connection is back
+dbmask mask --config config/dbmask.config.yaml --run-file .dbmask/runs/trial-001.json --apply --resume
+
+dbmask validate --config config/dbmask.config.yaml --run-file .dbmask/runs/trial-001.json --strict
+```
+
+Each batch's updates and the checkpoint commit together in PostgreSQL. A
+rolled-back batch is processed on resume. A committed batch is skipped even
+when the local JSON still shows it as in flight. The first read of a partial
+table starts after the committed primary-key-ordered prefix and later pages
+use keyset pagination. Completed tables are skipped. The target journal
+stores only plan identity, table names and row/batch counts.
+
+The database lock serializes resumable applies in the target database. Keep
+using the same local audit directory so the existing repeat guard also sees
+other tracked applies. If a process was force-terminated, inspect the stale
+audit lock and verify that its process has exited before removing that lock.
+Preserve the run file and PostgreSQL journal. For a previously interrupted
+apply to resume, the matching journal entry must exist in the original target.
+
+On a resumed run, `resumed_from_rows` and `resumed_from_batches` show the
+starting point per table. `rows_written` and `committed_batches` are cumulative
+totals. The preceding attempt stays in `execution_history`. After apply reaches
+`execution.status: applied`, use `validations[-1].passed_strict` to check the
+result of the separate strict validation.
 
 ## Existing commands and API callers
 
@@ -143,8 +189,10 @@ earlier confirmed plan.
 The generated PostgreSQL contract workflow keeps its shared frozen plan at
 `run-records/confirmed.json` inside the retained evidence directory. Scanning,
 previewing, applying and the positive/negative/final validation stages reuse
-that file, and a repeated-apply control verifies refusal without changing the
-target snapshot. The fixture confirms the plan automatically only after its
+that file. It terminates a PostgreSQL connection before and after a batch
+commit, verifies the resume points and checks that committed rows keep their
+original PostgreSQL tuple versions across retries. A repeated-apply control
+also verifies refusal. The fixture confirms the plan automatically only after its
 exact expected classifications have been asserted. This automated test
 confirmation is separate from a person reviewing and confirming a real
 database's plan. The bounded-coverage control uses its own validation policy

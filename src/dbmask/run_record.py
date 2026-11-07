@@ -333,7 +333,9 @@ class RunRecord:
             lock.unlink(missing_ok=True)
 
     @contextmanager
-    def apply_guard(self, directory: str | Path, reason: Optional[str] = None) -> Iterator[None]:
+    def apply_guard(
+        self, directory: str | Path, reason: Optional[str] = None, *, resume: bool = False,
+    ) -> Iterator[None]:
         """Hold a local target lock and refuse tracked repeated masking.
 
         An explicit nonblank override reason records the caller's decision;
@@ -358,6 +360,11 @@ class RunRecord:
                 if (prior.data["plan"]["target"]["id"] == target_id
                         and selected & prior._sensitive_scope()
                         and prior._may_have_writes() and reason is None):
+                    if prior is self and resume:
+                        if self.data["execution"].get("resumable") is True:
+                            # Runner must still verify this run's target-side checkpoint.
+                            continue
+                        raise ValueError("This run was not started with --resumable; it has no safe resume point")
                     raise ValueError(
                         "Tracked masking already affected this target and column scope; "
                         "restore an untouched copy or provide an explicit repeat override reason"

@@ -9,6 +9,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Approved PostgreSQL masking runs can opt into transactional checkpoints
+  with `mask --apply --resumable`. Continue the same plan with
+  `mask --apply --resume` and run strict validation on the finished target.
 - Successful PostgreSQL contract runs export an offline, primary-key-aligned
   before/after HTML review, four complete synthetic-data CSVs, and a manifest
   with row counts, primary keys, SHA-256 hashes and CSV NULL conventions.

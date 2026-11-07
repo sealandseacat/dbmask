@@ -252,7 +252,9 @@ Use `dbmask plan` → `dbmask approve` → `dbmask mask --run-file ... --apply`
 validation tied to one confirmed column/strategy plan. Records retain review
 metadata, per-batch committed row counts, uncertain writes and validation
 coverage without raw values or connection secrets. Local repeat protection
-depends on retaining the shared audit directory. See the
+depends on retaining the shared audit directory. On PostgreSQL, start an
+approved apply with `--resumable` and continue after a disconnect with
+`--apply --resume` and the same run file. See the
 [complete workflow and recovery limits](docs/run-records.md).
 
 ## Supported databases
